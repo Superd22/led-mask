@@ -269,17 +269,22 @@ export const command = {
     encodeCommand('M', [enable ? 1 : 0, clampByte(mode)]),
 
   /**
-   * ⚠️ Text foreground color. [go]'s code appends r, g, b; the braindump documents the wire order
-   * as R, B, G. Still unsettled — [js]'s captured FC frame uses ff ff ff, which can't distinguish
-   * them. We follow the code. Send pure red once on real hardware to settle it.
+   * Foreground color. CONFIRMED on hardware with enable = 1: this is what actually sets the color,
+   * not the uploaded per-column RGB (which is ignored). One 16-byte command, ~11ms.
+   *
+   * Note the official app sends enable = 0, so that byte likely selects a source rather than being a
+   * plain on/off.
+   *
+   * ⚠️ Byte order still unconfirmed: [go] appends r, g, b; the braindump documents R, B, G. [js]'s
+   * capture is near-white and can't distinguish them. Send pure red and see what lights up.
    */
   foregroundColor: (r, g, b, enable = 1) =>
     encodeCommand('FC', [enable ? 1 : 0, clampByte(r), clampByte(g), clampByte(b)]),
 
   /**
-   * Text background color. The verb is `BC`, not the `BG` that [go] sends — settled by [js], whose
-   * captured frame from the official app decrypts to `06 "BC" 00 7f 7f 7f`. [go]'s `BG` is the
-   * outlier and was most likely never exercised.
+   * Background color. The verb is `BC`, not the `BG` that [go] sends — settled by [js], whose captured
+   * frame from the official app decrypts to `06 "BC" 00 7f 7f 7f`. [go]'s `BG` is the outlier and was
+   * most likely never exercised. Untested on hardware; FC's enable=1 result suggests trying 1 here.
    */
   backgroundColor: (r, g, b, enable = 1) =>
     encodeCommand('BC', [enable ? 1 : 0, clampByte(r), clampByte(g), clampByte(b)]),

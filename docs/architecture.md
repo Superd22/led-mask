@@ -115,9 +115,9 @@ So the visualizer is host-side, and it's realistic within the transport budget a
   populate the bank itself — see
   [protocol.md](protocol.md#confirmed-on-hardware-uploads-do-not-write-diy-slots). `PLAY` is ~11 ms,
   so index switching is comfortably fast.
-- **`FC`/`BC` color commands cost exactly the same as `PLAY`** — one encrypted 16-byte write. That
-  gives an orthogonal color axis for free: shape from the frame bank, hue/brightness from the
-  spectrum.
+- **`FC` with `enable = 1` is the colour axis — confirmed on hardware**, one encrypted 16-byte write
+  at ~11 ms, same cost as `PLAY`. So shape and colour are orthogonal and both run at 24 Hz: shape from
+  the DIY bank, hue/brightness from the spectrum. This is the whole visualizer architecture.
 - **Don't stream novel bitmaps.** That's the `DATS`/`REOK`/`DATCP` handshake — a few frames per
   second at best, and it consumes a DIY slot.
 - **Where the audio comes from differs per role.** Role A (phone): `getUserMedia` mic →

@@ -12,15 +12,22 @@ below.** Where a claim here contradicts a source, this wins.
 | **Discovery and connect work** | `namePrefix: 'MASK'` + service `0xfff0` resolves; unbonded, no OS pairing. `startNotifications()` on `…9601` succeeds. |
 | **Display is 46 columns** wide, 16 high | Measured: a 32-column upload rendered as a partial rectangle. No source states this. |
 | **Upload writes the LIVE display, not a DIY slot** | 20 successful uploads (every step ACKed), then `PLAY 1…3` still showed the pre-existing official-app DIY images. `DATS` carries no slot index because there is no slot to address. |
-| **Uploaded per-column RGB is IGNORED** | A red fill rendered **white**. Consistent with no source ever having uploaded a non-white colour array: mask-go hardcodes `0xFFFFFF`, the official-app capture is `0xFFFFFC`. Colour most likely comes from `FC`/`BC` and their `enable` byte. |
+| **Uploaded per-column RGB is IGNORED** | A red fill rendered **white**. Consistent with no source ever having uploaded a non-white colour array: mask-go hardcodes `0xFFFFFF`, the official-app capture is `0xFFFFFC`. |
+| **`FC` with `enable = 1` DOES set the colour** | Confirmed. This is the colour control, not the upload payload — and at ~11 ms it is 30× cheaper. Note the official app sends `enable = 0`, so that byte is doing more than a simple on/off. |
 | **`PLAY` switching works** | Returns `PLAYOK` every time. DIY slots are real and persistent — but authored by the official app, not by us. |
 | **Upload costs ~300–350 ms** | Measured over 20 sequential uploads at 46 columns (3 packets each). |
 | **A command round trip is ~11 ms** | Single 16-byte write, e.g. `FC`. Comfortably 24 Hz. |
 
-The practical consequence: there are **two display paths, with very different costs.** `PLAY` over
-official-app-authored slots is the fast one (~11 ms, good for the visualizer). Upload is the slow one
-(~300 ms) and is the only way to put *your own* bitmap on the face, but it lands in a transient buffer
-and you don't control its colour through the payload.
+The practical consequence: **shape and colour are separate, and both are cheap.**
+
+| Axis | How | Cost |
+|---|---|---|
+| Shape | `PLAY n` over official-app-authored DIY slots, or `IMAG`/`ANIM` | ~11 ms |
+| Colour | `FC` with `enable = 1` | ~11 ms |
+| Your own bitmap | `DATS` upload → live display buffer, colour not controllable via payload | ~300 ms |
+
+Both axes are comfortably 24 Hz, and they are orthogonal — which is exactly what an audio-reactive
+visualizer needs. Upload is the odd one out: use it for text and one-off stills, never per frame.
 
 ## Sources
 
@@ -108,7 +115,7 @@ Byte layouts below are quoted from **[bd]** in its `06LIGHTnn` shorthand, cross-
 | `PLAY` | 6 | `01` then 1 index byte | Show an uploaded ("DIY") image | **[go][cp][bd]** |
 | `SPEED` | 6 | 1 byte | Text scroll speed, 0–255 | **[js][go][bd]** |
 | `M` | 3 | 1 enable byte, 1 mode byte | Text color mode. `00`–`03` gradients, `04`–`07` background image (`04` x-mask, `05` christmas, `06` love, `07` scream) | **[go][bd]** |
-| `FC` | 6 | 1 enable byte, 3 color bytes | Text foreground color | **[js][go][bd]**, ⚠️ byte order still disputed |
+| `FC` | 6 | 1 enable byte, 3 color bytes | Foreground color. **Confirmed working on hardware with `enable = 1`.** ⚠️ byte order still unconfirmed | **[js][go][bd]** + hardware |
 | `BC` | 6 | 1 enable byte, 3 color bytes | Text background color | **[js][bd]** — **not** `BG` |
 | `DATS` | 9 | 2-byte total len, 2-byte bitmap len, 1 zero byte | Begin an upload | **[go][bd]** |
 | `DATCP` | 5 | — | Finish an upload | **[js][go][bd]** |
