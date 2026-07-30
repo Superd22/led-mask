@@ -534,6 +534,7 @@ function Visualizer() {
     audioRef.current?.stream.getTracks().forEach((t) => t.stop());
     audioRef.current?.ctx.close();
     audioRef.current = null;
+    if (running) mask.log('sys', 'visualizer stopped');
     setRunning(false);
     setBands(new Array(SPECTRUM_BANDS).fill(0));
   };
@@ -552,6 +553,10 @@ function Visualizer() {
       const bins = new Uint8Array(analyser.frequencyBinCount);
       audioRef.current = { ctx, stream, analyser, bins };
       setRunning(true);
+      mask.log('sys', `visualizer started @ ${live.current.hz}Hz, effect ${live.current.effect}`,
+        null, '', 'ok');
+      if (!mask.connected) mask.log('sys', 'not connected — bars will move but nothing is sent',
+        null, '', 'warn');
       tick();
     } catch (e) {
       setErr(e.message);
@@ -992,12 +997,20 @@ function RawConsole() {
 }
 
 function Log({ entries, onClear }) {
-  const endRef = useRef(null);
-  useEffect(() => endRef.current?.scrollIntoView({ block: 'nearest' }), [entries.length]);
+  const boxRef = useRef(null);
+  // Keep the newest entry visible WITHOUT moving the page. scrollIntoView() scrolls the nearest
+  // scrollable ancestor, which meant every log line yanked the whole document down. Scroll the box
+  // itself, and only when the user is already at the bottom, so manual scrollback is never fought.
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }, [entries.length]);
   return html`
     <${Section} title=${`Log (${entries.length})`}>
       <div class="row"><${Btn} onClick=${onClear}>Clear<//></div>
-      <div class="log">
+      <div class="log" ref=${boxRef}>
         ${entries.map((e, i) => html`
           <div class="entry ${e.level} dir-${e.dir}" key=${i}>
             <span class="at">${e.at}</span>
@@ -1007,7 +1020,6 @@ function Log({ entries, onClear }) {
             ${e.text && html`<span class="text">${e.text}</span>`}
           </div>
         `)}
-        <div ref=${endRef}></div>
       </div>
     <//>
   `;

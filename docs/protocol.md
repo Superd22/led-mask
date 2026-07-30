@@ -81,11 +81,19 @@ Bluetooth settings.
 
 All three live under the `fff0` service.
 
-| UUID | Direction | Purpose |
-|---|---|---|
-| `d44bc439-abfd-45a2-b575-925416129600` | write | commands, AES-128-ECB encrypted **[go][cp]** |
-| `d44bc439-abfd-45a2-b575-925416129601` | notify | responses, **also AES-128-ECB encrypted** **[go]** |
-| `d44bc439-abfd-45a2-b575-92541612960a` | write | bulk image data, **plaintext** **[go]** |
+| UUID | ATT handle | Direction | Purpose |
+|---|---|---|---|
+| `d44bc439-abfd-45a2-b575-925416129600` | `0x06` | write | commands, AES-128-ECB encrypted **[go][cp]** |
+| `d44bc439-abfd-45a2-b575-925416129601` | `0x0d` | notify | responses, **also AES-128-ECB encrypted** **[go]** |
+| `d44bc439-abfd-45a2-b575-92541612960a` | `0x09` | write | bulk image data, **plaintext** **[go]** |
+| **undocumented — UUID unknown** | **`0x0b`** | write-without-response | **the sound-visualizer stream**, AES-128-ECB encrypted |
+
+⚠️ **There is a fourth characteristic in this service that no public source documents.** The
+visualizer stream does NOT go to the command characteristic — a capture shows it writing to ATT
+handle `0x0b`, while commands go to `0x06`. Handles aren't UUIDs and a capture cannot reveal the
+UUID, so the app **enumerates the service with `getCharacteristics()`** and picks the writable
+characteristic that isn't one of the three known ones. Connect once and the log prints every UUID in
+the service, marking the undocumented one.
 
 ## Command frame
 

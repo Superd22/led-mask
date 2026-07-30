@@ -24,7 +24,7 @@ export class MaskTransport extends EventTarget {
     super();
     this.device = null;
     this.server = null;
-    this.chars = { command: null, notify: null, upload: null };
+    this.chars = { command: null, notify: null, upload: null, spectrum: null };
     this.state = 'disconnected';
     /** Queue of resolvers waiting on the next notification (used by the upload handshake). */
     this._waiters = [];
@@ -95,9 +95,43 @@ export class MaskTransport extends EventTarget {
 
     this.server = await this.device.gatt.connect();
     const service = await this.server.getPrimaryService(SERVICE_UUID);
-    this.chars.command = await service.getCharacteristic(CHARACTERISTIC.command);
-    this.chars.notify = await service.getCharacteristic(CHARACTERISTIC.notify);
-    this.chars.upload = await service.getCharacteristic(CHARACTERISTIC.upload);
+
+    // Enumerate everything rather than only fetching the three UUIDs we knew about. A capture of the
+    // official app's visualizer showed it writing to a FOURTH characteristic in this service that no
+    // public source documents, so discover it instead of assuming.
+    const all = await service.getCharacteristics();
+    const known = new Set(Object.values(CHARACTERISTIC));
+    for (const c of all) {
+      const props = Object.entries(c.properties)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+        .join(',');
+      const label = known.has(c.uuid) ? '' : '  <-- UNDOCUMENTED';
+      this.log('sys', `char ${c.uuid} [${props}]${label}`, null, '', known.has(c.uuid) ? 'info' : 'ok');
+    }
+
+    const byUuid = new Map(all.map((c) => [c.uuid, c]));
+    this.chars.command = byUuid.get(CHARACTERISTIC.command);
+    this.chars.notify = byUuid.get(CHARACTERISTIC.notify);
+    this.chars.upload = byUuid.get(CHARACTERISTIC.upload);
+    if (!this.chars.command || !this.chars.notify || !this.chars.upload) {
+      throw new Error('expected characteristics missing from the fff0 service');
+    }
+
+    // The visualizer stream target: the writable characteristic that is not one of the three known
+    // ones. Falls back to the command characteristic so the feature degrades rather than breaking.
+    const extra = all.filter(
+      (c) => !known.has(c.uuid) && (c.properties.writeWithoutResponse || c.properties.write),
+    );
+    this.chars.spectrum = extra[0] ?? this.chars.command;
+    if (extra.length) {
+      this.log('sys', `visualizer -> ${extra[0].uuid}`, null, '', 'ok');
+      if (extra.length > 1) {
+        this.log('sys', `${extra.length} undocumented writable chars; using the first`, null, '', 'warn');
+      }
+    } else {
+      this.log('sys', 'no undocumented characteristic found; visualizer may not work', null, '', 'warn');
+    }
 
     this.chars.notify.addEventListener('characteristicvaluechanged', (e) =>
       this._onNotification(e.target.value),
@@ -179,10 +213,21 @@ export class MaskTransport extends EventTarget {
    */
   async sendSpectrum(bytesOrPromise) {
     if (!this.connected) throw new Error('not connected');
-    const char = this.chars.command;
+    const char = this.chars.spectrum;
+    if (!char) throw new Error('no visualizer characteristic');
     const bytes = await bytesOrPromise;
-    if (char.writeValueWithoutResponse) await char.writeValueWithoutResponse(bytes);
-    else await char.writeValue(bytes);
+    if (char.properties?.writeWithoutResponse && char.writeValueWithoutResponse) {
+      await char.writeValueWithoutResponse(bytes);
+    } else {
+      await char.writeValue(bytes);
+    }
+    // Heartbeat so the log shows the stream is alive without burying everything at 10 frames/sec.
+    this._specCount = (this._specCount ?? 0) + 1;
+    const now = performance.now();
+    if (!this._specLogAt || now - this._specLogAt > 2000) {
+      this._specLogAt = now;
+      this.log('out', `spectrum x${this._specCount}`, bytes);
+    }
   }
 
   /** Write plaintext bytes straight to the bulk upload characteristic. */
