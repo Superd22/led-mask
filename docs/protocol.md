@@ -86,14 +86,16 @@ All three live under the `fff0` service.
 | `d44bc439-abfd-45a2-b575-925416129600` | `0x06` | write | commands, AES-128-ECB encrypted **[go][cp]** |
 | `d44bc439-abfd-45a2-b575-925416129601` | `0x0d` | notify | responses, **also AES-128-ECB encrypted** **[go]** |
 | `d44bc439-abfd-45a2-b575-92541612960a` | `0x09` | write | bulk image data, **plaintext** **[go]** |
-| **undocumented — UUID unknown** | **`0x0b`** | write-without-response | **the sound-visualizer stream**, AES-128-ECB encrypted |
+| `d44bc439-abfd-45a2-b575-92541612960b` | `0x0b` | write-no-response | **the sound-visualizer stream**, AES-128-ECB encrypted |
 
-⚠️ **There is a fourth characteristic in this service that no public source documents.** The
-visualizer stream does NOT go to the command characteristic — a capture shows it writing to ATT
-handle `0x0b`, while commands go to `0x06`. Handles aren't UUIDs and a capture cannot reveal the
-UUID, so the app **enumerates the service with `getCharacteristics()`** and picks the writable
-characteristic that isn't one of the three known ones. Connect once and the log prints every UUID in
-the service, marking the undocumented one.
+⚠️ **The `…960b` characteristic appears in no public source.** The visualizer stream does NOT go to
+the command characteristic: a capture showed it writing to ATT handle `0x0b` while commands went to
+`0x06`, and enumerating the service on hardware resolved that handle to `…960b`. Sending visualizer
+frames to `…9600` does nothing at all — the mask simply ignores them.
+
+Found by comparing ATT handles across two captures, then calling
+`service.getCharacteristics()`. Worth remembering as a method: a capture yields handles, never UUIDs,
+so pairing a capture with a live enumeration is what turns one into the other.
 
 ## Command frame
 

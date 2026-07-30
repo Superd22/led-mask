@@ -101,12 +101,13 @@ export class MaskTransport extends EventTarget {
     // public source documents, so discover it instead of assuming.
     const all = await service.getCharacteristics();
     const known = new Set(Object.values(CHARACTERISTIC));
+    const PROP_NAMES = [
+      'broadcast', 'read', 'writeWithoutResponse', 'write', 'notify', 'indicate',
+      'authenticatedSignedWrites', 'reliableWrite', 'writableAuxiliaries',
+    ];
     for (const c of all) {
-      const props = Object.entries(c.properties)
-        .filter(([, v]) => v)
-        .map(([k]) => k)
-        .join(',');
-      const label = known.has(c.uuid) ? '' : '  <-- UNDOCUMENTED';
+      const props = PROP_NAMES.filter((n) => c.properties?.[n]).join(',');
+      const label = known.has(c.uuid) ? '' : '  <-- not in any public source';
       this.log('sys', `char ${c.uuid} [${props}]${label}`, null, '', known.has(c.uuid) ? 'info' : 'ok');
     }
 
@@ -118,20 +119,18 @@ export class MaskTransport extends EventTarget {
       throw new Error('expected characteristics missing from the fff0 service');
     }
 
-    // The visualizer stream target: the writable characteristic that is not one of the three known
-    // ones. Falls back to the command characteristic so the feature degrades rather than breaking.
-    const extra = all.filter(
-      (c) => !known.has(c.uuid) && (c.properties.writeWithoutResponse || c.properties.write),
+    // Prefer the known visualizer UUID; fall back to discovery so other vendor models still work.
+    this.chars.spectrum = byUuid.get(CHARACTERISTIC.spectrum)
+      ?? all.find((c) => !known.has(c.uuid) && (c.properties?.writeWithoutResponse || c.properties?.write))
+      ?? this.chars.command;
+    this.log(
+      'sys',
+      `visualizer -> ${this.chars.spectrum.uuid}` +
+        (this.chars.spectrum.uuid === CHARACTERISTIC.command ? ' (fallback — may not work)' : ''),
+      null,
+      '',
+      this.chars.spectrum.uuid === CHARACTERISTIC.command ? 'warn' : 'ok',
     );
-    this.chars.spectrum = extra[0] ?? this.chars.command;
-    if (extra.length) {
-      this.log('sys', `visualizer -> ${extra[0].uuid}`, null, '', 'ok');
-      if (extra.length > 1) {
-        this.log('sys', `${extra.length} undocumented writable chars; using the first`, null, '', 'warn');
-      }
-    } else {
-      this.log('sys', 'no undocumented characteristic found; visualizer may not work', null, '', 'warn');
-    }
 
     this.chars.notify.addEventListener('characteristicvaluechanged', (e) =>
       this._onNotification(e.target.value),

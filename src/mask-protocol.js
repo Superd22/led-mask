@@ -31,11 +31,18 @@
  */
 export const SERVICE_UUID = 0xfff0;
 
-/** Characteristics, all under SERVICE_UUID. */
+/**
+ * Characteristics, all under SERVICE_UUID.
+ *
+ * `spectrum` is NOT in any public source. A capture showed the official app's visualizer writing to
+ * ATT handle 0x0b while commands went to 0x06; enumerating the service on real hardware resolved that
+ * handle to …960b. Sending visualizer frames to the command characteristic does nothing.
+ */
 export const CHARACTERISTIC = {
   command: 'd44bc439-abfd-45a2-b575-925416129600', // write, AES-ECB encrypted
   notify: 'd44bc439-abfd-45a2-b575-925416129601', // notify, AES-ECB encrypted TOO
   upload: 'd44bc439-abfd-45a2-b575-92541612960a', // write, plaintext image data
+  spectrum: 'd44bc439-abfd-45a2-b575-92541612960b', // write-no-response, AES-ECB, visualizer stream
 };
 
 /** Device name prefix, usable as a requestDevice() filter. */
