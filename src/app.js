@@ -491,10 +491,11 @@ function ColorBank() {
 function UploadLab() {
   const [width, setWidth] = useState(46);
   const [trailing, setTrailing] = useState(0);
-  const [format, setFormat] = useState('fullcolor');
+  const [format, setFormat] = useState('percolumn');
   const [columnMajor, setColumnMajor] = useState(true);
   const [bitmapLenMode, setBitmapLenMode] = useState('full');
   const [releaseOverride, setReleaseOverride] = useState(true);
+  const [pattern, setPattern] = useState('diagonal');
   const [result, setResult] = useState('');
   const canvasRef = useRef(null);
 
@@ -523,8 +524,18 @@ function UploadLab() {
       const bitmapLength = bitmapLenMode === 'zero' ? 0 : payload.length;
       return { payload, bitmapLength };
     }
-    // Per-column format, for comparison: same hue ramp, but colour can only vary horizontally.
-    const cols = Array.from({ length: width }, () => Array(DISPLAY_HEIGHT).fill(1));
+    // Per-column format. Colour can only vary horizontally, but the BITMAP can vary vertically,
+    // which is what maps the display's real vertical extent.
+    const cols = Array.from({ length: width }, (_, x) =>
+      Array.from({ length: DISPLAY_HEIGHT }, (_, y) => {
+        if (pattern === 'solid') return 1;
+        // 'diagonal': each column lights exactly one row, stepping down and wrapping every 16
+        // columns. Reveals how many rows physically exist and in what order.
+        if (pattern === 'diagonal') return y === x % DISPLAY_HEIGHT ? 1 : 0;
+        // 'edges': top row, bottom row and the two middle rows only.
+        return y === 0 || y === DISPLAY_HEIGHT - 1 || y === 7 || y === 8 ? 1 : 0;
+      }),
+    );
     const bitmap = encodeBitmap(cols);
     const colors = encodeColors(cols.map((_, x) => colorAt(x, DISPLAY_HEIGHT - 1)));
     return buildUploadPayload(bitmap, colors);
@@ -580,6 +591,19 @@ function UploadLab() {
           onClick=${() => setFormat('percolumn')}>bitmap + per-column</button>
       </div>
 
+      ${format === 'percolumn' && html`
+        <div class="row wrap">
+          <span class="lbl">Bitmap pattern</span>
+          ${['diagonal', 'solid', 'edges'].map((pt) => html`
+            <button class=${pattern === pt ? 'primary' : ''} onClick=${() => setPattern(pt)}>${pt}</button>
+          `)}
+        </div>
+        <p class="note">
+          <b>diagonal</b> lights exactly one row per column, stepping down and wrapping every 16
+          columns — a staircase. Count the visible steps: that is how many rows the display really has,
+          and it tells us whether "not full height" means the panel is taller than 16 rows.
+        </p>
+      `}
       ${format === 'fullcolor' && html`
         <div class="row wrap">
           <span class="lbl">Pixel order</span>
@@ -595,7 +619,7 @@ function UploadLab() {
           <button class=${bitmapLenMode === 'zero' ? 'primary' : ''}
             onClick=${() => setBitmapLenMode('zero')}>⚠️ 0 — SOFT-LOCKS the mask</button>
           <button class=${bitmapLenMode === 'full' ? 'primary' : ''}
-            onClick=${() => setBitmapLenMode('full')}>= total</button>
+            onClick=${() => setBitmapLenMode('full')}>⚠️ = total — renders as bitmap bits (garbage)</button>
         </div>
       `}
 

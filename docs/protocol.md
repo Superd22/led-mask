@@ -12,14 +12,16 @@ below.** Where a claim here contradicts a source, this wins.
 | **Discovery and connect work** | `namePrefix: 'MASK'` + service `0xfff0` resolves; unbonded, no OS pairing. `startNotifications()` on `…9601` succeeds. |
 | **Display is 46 columns** wide, 16 high | Measured: a 32-column upload rendered as a partial rectangle. No source states this. |
 | **Upload writes the LIVE display, not a DIY slot** | 20 successful uploads (every step ACKed), then `PLAY 1…3` still showed the pre-existing official-app DIY images. `DATS` carries no slot index because there is no slot to address. |
-| **Uploaded per-column RGB is IGNORED** | A red fill rendered **white**. Consistent with no source ever having uploaded a non-white colour array: mask-go hardcodes `0xFFFFFF`, the official-app capture is `0xFFFFFC`. |
+| **Uploaded per-column RGB WORKS** | ✅ Corrected. A rainbow renders in full colour at full width — **provided `FC enable=0` is sent first**. An earlier red fill rendered white only because an `FC enable=1` override was still active. |
 | **`FC` with `enable = 1` DOES set the colour** | Confirmed. This is the colour control, not the upload payload — and at ~11 ms it is 30× cheaper. Note the official app sends `enable = 0`, so that byte is doing more than a simple on/off. |
 | **`PLAY` switching works** | Returns `PLAYOK` every time. DIY slots are real and persistent — but authored by the official app, not by us. |
 | **Upload costs ~300–350 ms** | Measured over 20 sequential uploads at 46 columns (3 packets each). |
 | **A command round trip is ~11 ms** | Single 16-byte write, e.g. `FC`. Comfortably 24 Hz. |
 | **`DATS` with `bitmapLen = 0` soft-locks the mask** | Upload animation freezes; power cycle required. Every step still ACKed, so **ACKs do not mean the mask is healthy**. |
 | **`CHEC` works and returns 34** | Reply frame is `[05]["CHEC"][0x22]`. So slots are countable, there are more than the 20 [cp] assumed, and the notify channel does more than upload ACKs. Makes `DELE` likely real too. |
-| **⚠️ "per-column RGB is ignored" is now in doubt** | An uploaded rainbow *did* render as a pattern. If `FC`'s `enable` byte selects a colour *source* (`1` = literal override, `0` = use the content's own colours — which is what the official app always sends), then the earlier white was an active override, not a broken colour section. Being retested. |
+| **`FC`'s `enable` byte selects a colour SOURCE** | `1` = override everything with these literal RGB bytes. `0` = use the content's own colours. This is why the official app always sends `0`, and why an upload's colours were previously invisible. |
+| **`DATS` `bitmapLen = total` renders the whole payload as bitmap bits** | Random on/off LEDs. Confirms the payload is simply split `[bitmap: bitmapLen bytes][colours: remainder]` — there is **no raw-RGB-per-pixel mode** on this path. |
+| **Our uploads do not fill the display vertically** | All 16 bits set per column still renders short, while DIY slot 20 fills the whole face. Suggests DIY images use a **richer format than this upload path** — more rows, and possibly true per-pixel colour. |
 
 The practical consequence: **shape and colour are separate, and both are cheap.**
 
@@ -174,7 +176,9 @@ Candidate mechanisms, cheapest first:
    **Tested — it SOFT-LOCKS the mask.** The upload animation freezes mid-way and only a power cycle
    recovers it. Notably every step still ACKed (`DATSOK`, 5× `REOK`, `DATCPOK`), so **notification
    ACKs are not a health signal** — the firmware will confirm a transfer that is wedging it.
-3. **Pixel order**, if a full-color format exists: column-major or row-major is unknown.
+3. ~~**Pixel order** for a full-color format.~~ **Disproven.** `bitmapLen = total` renders the payload
+   as bitmap bits, and `bitmapLen = 0` soft-locks. `DATS` only ever splits `[bitmap][per-column
+   colours]`, so per-pixel colour is not reachable through this verb at all.
 4. **`DELE` and `CHEC`** exist in **[rd]** and nowhere else — "delete uploaded images" and "query how
    many images are uploaded". Both only make sense if a *writable* slot bank exists, which is further
    evidence the path is there.
