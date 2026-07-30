@@ -521,7 +521,15 @@ function Visualizer() {
   const [source, setSource] = useState('mic');
   const [effect, setEffect] = useState(0);
   const [hz, setHz] = useState(SPECTRUM_HZ);
-  const [gain, setGain] = useState(2.2);
+  // dB floor: everything below this reads as zero. The single most useful "sensitivity" control.
+  const [floorDb, setFloorDb] = useState(-72);
+  // Dynamic range above the floor that maps onto the 16 available levels.
+  const [rangeDb, setRangeDb] = useState(52);
+  // Pink-noise compensation. Music loses ~4-5 dB per octave, so without this the bass bands sit
+  // pinned at max and the treble bands never move.
+  const [tilt, setTilt] = useState(4.5);
+  // Fall time. Instant attack + slow decay is what makes bars read as punchy rather than mushy.
+  const [fallMs, setFallMs] = useState(220);
   const [fileName, setFileName] = useState('');
   const [bands, setBands] = useState(() => new Array(SPECTRUM_BANDS).fill(0));
   const [err, setErr] = useState('');
@@ -530,17 +538,23 @@ function Visualizer() {
   const timerRef = useRef(null);
   const elRef = useRef(null); // <audio> for file playback
   const fileInputRef = useRef(null);
-  const live = useRef({ effect, gain, hz });
-  live.current = { effect, gain, hz };
+  const envRef = useRef(new Float32Array(SPECTRUM_BANDS));
+  const live = useRef({});
+  live.current = { effect, hz, floorDb, rangeDb, tilt, fallMs };
 
   const ensureAudio = () => {
     if (!audioRef.current) {
       const ctx = new AudioContext();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.6;
+      // 8192 -> ~5.4 Hz bins. At 1024 the bins are 43 Hz wide and the lowest log-spaced bands land on
+      // the SAME bin, so they were mathematically incapable of differing from each other.
+      analyser.fftSize = 8192;
+      // Low, because we run our own attack/decay envelope below; stacking both smears transients.
+      analyser.smoothingTimeConstant = 0.35;
+      analyser.minDecibels = -100;
+      analyser.maxDecibels = -10;
       audioRef.current = {
-        ctx, analyser, bins: new Uint8Array(analyser.frequencyBinCount),
+        ctx, analyser, bins: new Float32Array(analyser.frequencyBinCount),
         micStream: null, micNode: null, fileNode: null,
       };
     }
@@ -601,28 +615,55 @@ function Visualizer() {
     }
   };
 
-  /** Log-spaced buckets: linear FFT bins would put almost everything in the first few bands. */
+  /**
+   * Turn the FFT into 24 bar levels the way audio visualizers actually do it:
+   *
+   *   1. log-spaced bands (linear bins would pile everything into the low end)
+   *   2. work in dB, not linear amplitude — hearing is logarithmic
+   *   3. spectral tilt to undo music's ~4.5 dB/octave rolloff, so treble bands move at all
+   *   4. map a dB window onto the 16 available levels, rather than a raw multiply
+   *   5. instant attack, exponential decay, frame-rate independent
+   */
   const tick = () => {
     clearInterval(timerRef.current);
+    const period = 1000 / live.current.hz;
     timerRef.current = setInterval(async () => {
       const a = audioRef.current;
       if (!a) return;
-      a.analyser.getByteFrequencyData(a.bins);
+      a.analyser.getFloatFrequencyData(a.bins); // dBFS
 
+      const { floorDb: fl, rangeDb: rg, tilt: tl, fallMs: fm } = live.current;
       const nyquist = a.ctx.sampleRate / 2;
       const minHz = 40;
-      const maxHz = Math.min(12000, nyquist);
+      const maxHz = Math.min(14000, nyquist);
+      const env = envRef.current;
+      // Frame-rate independent decay: same fall time whether we run at 10 Hz or 50 Hz.
+      const decay = Math.exp(-period / Math.max(1, fm));
+
       const out = new Array(SPECTRUM_BANDS).fill(0);
       for (let b = 0; b < SPECTRUM_BANDS; b++) {
         const lo = minHz * (maxHz / minHz) ** (b / SPECTRUM_BANDS);
         const hi = minHz * (maxHz / minHz) ** ((b + 1) / SPECTRUM_BANDS);
-        const i0 = Math.floor((lo / nyquist) * a.bins.length);
+        const i0 = Math.max(1, Math.floor((lo / nyquist) * a.bins.length));
         const i1 = Math.max(i0 + 1, Math.floor((hi / nyquist) * a.bins.length));
-        let peak = 0;
-        for (let i = i0; i < i1 && i < a.bins.length; i++) peak = Math.max(peak, a.bins[i]);
-        out[b] = Math.max(0, Math.min(SPECTRUM_MAX,
-          Math.round((peak / 255) * SPECTRUM_MAX * live.current.gain)));
+
+        let peak = -Infinity;
+        for (let i = i0; i < i1 && i < a.bins.length; i++) {
+          if (a.bins[i] > peak) peak = a.bins[i];
+        }
+        if (!Number.isFinite(peak)) peak = -160;
+
+        // Tilt is referenced to 200 Hz: bands above it get boosted, below it cut.
+        const centerHz = Math.sqrt(lo * hi);
+        const tilted = peak + tl * Math.log2(centerHz / 200);
+
+        let v = (tilted - fl) / rg;
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+
+        env[b] = v > env[b] ? v : v + (env[b] - v) * decay;
+        out[b] = Math.round(env[b] * SPECTRUM_MAX);
       }
+
       setBands(out);
       if (mask.connected) {
         try {
@@ -631,7 +672,7 @@ function Visualizer() {
           mask.log('sys', `spectrum: ${e.message}`, null, '', 'error');
         }
       }
-    }, 1000 / live.current.hz);
+    }, period);
   };
 
   useEffect(() => { if (running) tick(); }, [hz]);
@@ -688,8 +729,29 @@ function Visualizer() {
 
       <${Slider} label=${`Rate (${hz} Hz)`} value=${hz} setValue=${setHz}
         onCommit=${() => {}} min=${1} max=${50} />
-      <${Slider} label=${`Gain (${gain.toFixed(1)}x)`} value=${Math.round(gain * 10)}
-        setValue=${(v) => setGain(v / 10)} onCommit=${() => {}} min=${1} max=${80} />
+      <${Slider} label=${`Sensitivity (floor ${floorDb} dB)`} value=${-floorDb}
+        setValue=${(v) => setFloorDb(-v)} onCommit=${() => {}} min=${40} max=${100} />
+      <${Slider} label=${`Contrast (range ${rangeDb} dB)`} value=${rangeDb}
+        setValue=${setRangeDb} onCommit=${() => {}} min=${15} max=${80} />
+      <${Slider} label=${`Treble tilt (${tilt.toFixed(1)} dB/oct)`} value=${Math.round(tilt * 2)}
+        setValue=${(v) => setTilt(v / 2)} onCommit=${() => {}} min=${0} max=${20} />
+      <${Slider} label=${`Fall time (${fallMs} ms)`} value=${fallMs}
+        setValue=${setFallMs} onCommit=${() => {}} min=${30} max=${800} />
+      <div class="row wrap">
+        <span class="lbl">Presets</span>
+        <button onClick=${() => { setFloorDb(-72); setRangeDb(52); setTilt(4.5); setFallMs(220); }}>
+          music
+        </button>
+        <button onClick=${() => { setFloorDb(-60); setRangeDb(35); setTilt(3); setFallMs(120); }}>
+          punchy
+        </button>
+        <button onClick=${() => { setFloorDb(-85); setRangeDb(65); setTilt(6); setFallMs(400); }}>
+          quiet room
+        </button>
+        <button onClick=${() => { setFloorDb(-70); setRangeDb(45); setTilt(5.5); setFallMs(90); }}>
+          speech
+        </button>
+      </div>
 
       ${err && html`<p class="warn">${err}</p>`}
       <p class="note">
@@ -698,9 +760,16 @@ function Visualizer() {
         heartbeat reports the rate actually achieved plus any drops, so you can find the real ceiling.
       </p>
       <p class="note">
-        Bands are log-spaced 40 Hz - 12 kHz; linear FFT bins would pile almost everything into the low
-        end. Playing a file routes audio to your speakers too — the microphone path deliberately does
-        not, to avoid feedback.
+        <b>Sensitivity</b> sets the noise floor — raise it until idle bars sit at zero.
+        <b>Contrast</b> is the dB window mapped onto the mask's 16 levels; narrower = more dramatic.
+        <b>Treble tilt</b> undoes music's natural rolloff, so the high bands actually move — this is
+        usually the control that fixes "all the bars look the same".
+        <b>Fall time</b> is how fast bars drop; attack is always instant.
+      </p>
+      <p class="note">
+        8192-point FFT (~5.4 Hz bins), log-spaced 40 Hz - 14 kHz. At 1024 the bins were 43 Hz wide and
+        the lowest bands shared the same bin, so they could not differ from one another no matter what.
+        Playing a file routes audio to your speakers too; the microphone path deliberately does not.
       </p>
     <//>
   `;

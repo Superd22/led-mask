@@ -452,7 +452,8 @@ band levels; the mask only renders.
 - `effect` selects one of **5 built-in visualizers**, `0x00`–`0x04`. There is no separate
   mode-select command; the effect travels in every frame.
 - 24 bands, one **nibble each, 0–15**. Observed values topped out at 9.
-- Sent to the command characteristic as **ATT Write Command** (no response) at **~10 Hz**.
+- Sent as **ATT Write Command** (no response) at **~10 Hz** by the official app — but the mask
+  accepts **50 Hz**, confirmed on hardware. The app is leaving 5× on the table.
 - The two trailing zero bytes never varied.
 
 Changing the audio source (music vs microphone) produces **no BLE traffic** — the phone just analyses
