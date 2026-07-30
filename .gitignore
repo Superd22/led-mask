@@ -4,3 +4,8 @@ dist/
 *.log
 .env
 .env.local
+capture-out/
+bug*.zip
+*btsnoop*
+bug/
+bugreport*/
