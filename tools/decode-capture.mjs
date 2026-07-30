@@ -193,8 +193,11 @@ function asCommand(value) {
 /** Upload packets are plaintext [byteCount][sequence][payload], byteCount including the seq byte. */
 function asUploadPacket(value) {
   if (value.length < 3 || value.length > 100) return null;
-  if (value[0] !== value.length - 1) return null;
-  return { seq: value[1], payload: value.subarray(2) };
+  const count = value[0];
+  // byteCount includes the sequence byte. The captured final packet arrived padded to the full MTU,
+  // so trust the count rather than the buffer length and slice to it.
+  if (count < 2 || count > value.length - 1) return null;
+  return { seq: value[1], payload: value.subarray(2, 1 + count) };
 }
 
 // ---------------------------------------------------------------- main

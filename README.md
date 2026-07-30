@@ -68,14 +68,16 @@ the path.
    services — unlike bleak, you cannot write to a characteristic and let the stack find the service.
 3. **Upload is a notification handshake, not a paced write loop.** `DATS` → `DATSOK` → (packet →
    `REOK`)* → `DATCP` → `DATCPOK`. Don't use `writeValueWithoutResponse()` for the packets.
-4. **Upload writes the live display, not a DIY slot** (confirmed on hardware). `PLAY` only *selects*
-   slots, and only the official app can author them. And the uploaded per-column RGB is **ignored** —
-   a red fill renders white — so colour comes from `FC`/`BC` instead.
+4. **`DATS` has two modes, set by its 5th arg byte.** `0x00` = text: field 2 is `bitmapLen`, payload
+   is `[1-bit bitmap][one RGB per column]`, lands on the live display in a 16-row band. `0x01` =
+   image: field 2 is the **destination slot**, payload is **raw RGB 3 bytes/pixel**, and it writes a
+   **persistent** slot. Decoded from a capture of the official app.
 5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; commands are
    ~11 ms on real hardware, so 24 Hz is comfortable. Uploads are ~300 ms, so they are not per-frame.
 6. **The mask cannot be queried.** No verb lists what is on the device, so the app owns its inventory.
-7. **The panel is ~46 × 48, but `DATS` only reaches a 16-row text band.** DIY images are true
-   per-pixel colour and fill the whole face, so they use a path nobody has reverse engineered yet.
+7. **The panel is 46 × 58** — from the capture, where `DATS` declared 8004 = 46 × 58 × 3 bytes.
+8. **`FC`'s enable byte picks a colour source**: `1` = override with literal RGB, `0` = use the
+   content's own colours. Getting this wrong makes uploaded colour look broken.
 
 ## Credits
 

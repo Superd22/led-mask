@@ -14,6 +14,7 @@ import {
   NAME_PREFIX,
   parseNotification,
   uploadSequence,
+  imageUploadSequence,
 } from './mask-protocol.js';
 
 const NOTIFY_TIMEOUT_MS = 5000;
@@ -206,15 +207,23 @@ export class MaskTransport extends EventTarget {
    * Run the full upload handshake: DATS -> DATSOK -> (packet -> REOK)* -> DATCP -> DATCPOK.
    * Drives the generator from mask-protocol.js and feeds it real notifications.
    */
+  /** Upload a full-face DIY image into a persistent slot. */
+  async uploadImage(payload, slot, { onProgress, unixSeconds = Math.floor(Date.now() / 1000) } = {}) {
+    return this._runUpload(imageUploadSequence(payload, slot, unixSeconds), onProgress);
+  }
+
   async upload(payload, bitmapLength, { trailing = 0, onProgress } = {}) {
-    const run = uploadSequence(payload, bitmapLength, trailing);
+    return this._runUpload(uploadSequence(payload, bitmapLength, trailing), onProgress);
+  }
+
+  async _runUpload(run, onProgress) {
     let step = run.next();
     let n = 0;
     while (!step.done) {
       const { characteristic, data } = step.value;
       const bytes = await data;
       const waiter = this._nextNotification(); // armed before the write, deliberately
-      await this._write(characteristic, bytes, characteristic === CHARACTERISTIC.upload ? `upload pkt ${n}` : undefined);
+      await this._write(characteristic, bytes, characteristic === CHARACTERISTIC.upload ? `pkt ${n}` : undefined);
       if (characteristic === CHARACTERISTIC.upload) n++;
       const response = await waiter;
       onProgress?.(n, response);

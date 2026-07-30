@@ -44,8 +44,30 @@ export const NAME_PREFIX = 'MASK';
 const KEY_HEX = '32672f7974ad43451d9c6c894a0e8764';
 const BLOCK = 16;
 
-/** Display height in pixels. Fixed by the protocol: uploads are encoded as 16-pixel columns. */
+/**
+ * Height of the TEXT band, in pixels. The text upload path encodes 16-pixel columns — but that band
+ * is only part of the panel; see DIY_HEIGHT.
+ */
 export const DISPLAY_HEIGHT = 16;
+
+/**
+ * True panel geometry, from a decrypted capture of the official app writing a DIY image:
+ * DATS declared 0x1f44 = 8004 bytes, and 8004 = 46 x 58 x 3. Confirmed by eye — the 16-row text band
+ * covers roughly a third of the face (16/58 = 28%).
+ */
+export const DIY_WIDTH = 46;
+export const DIY_HEIGHT = 58;
+/** Bytes in one full-face DIY image: 3 per pixel, no bitmap section. */
+export const DIY_IMAGE_BYTES = DIY_WIDTH * DIY_HEIGHT * 3;
+
+/**
+ * DATS mode byte (the 5th arg, unexplained until the capture).
+ *
+ * It selects how the mask reads the rest of the header AND the payload:
+ *   TEXT  (0) -> field 2 is bitmapLen; payload is [1-bit bitmap][one RGB per column], 16-row band.
+ *   IMAGE (1) -> field 2 is the DESTINATION SLOT; payload is raw RGB, 3 bytes per pixel, full face.
+ */
+export const DATS_MODE = { text: 0, image: 1 };
 
 /** Max bytes per upload write, including the 2-byte prefix — the mask rejects anything larger. */
 export const UPLOAD_PACKET_SIZE = 100;
@@ -308,8 +330,44 @@ export const command = {
       trailing & 0xff,
     ]),
 
-  /** Finish an upload. Expect a DATCPOK notification. */
-  finishUpload: () => encodeCommand('DATCP'),
+  /**
+   * Announce a DIY image upload: [total:2 BE][slot:2 BE][0x01].
+   *
+   * From the capture — the official app sent `1f 44 00 05 01` then `1f 44 00 06 01` for two images,
+   * i.e. 8004 bytes into slots 5 and 6.
+   */
+  beginImageUpload: (totalBytes, slot) =>
+    encodeCommand('DATS', [
+      (totalBytes >> 8) & 0xff,
+      totalBytes & 0xff,
+      (slot >> 8) & 0xff,
+      slot & 0xff,
+      DATS_MODE.image,
+    ]),
+
+  /**
+   * Finish an upload. Text uploads send no args; DIY image uploads carry a 4-byte big-endian Unix
+   * timestamp (observed `6a 6b 55 a3`), presumably the image's creation time.
+   */
+  finishUpload: (unixSeconds = null) =>
+    unixSeconds === null
+      ? encodeCommand('DATCP')
+      : encodeCommand('DATCP', [
+          (unixSeconds >>> 24) & 0xff,
+          (unixSeconds >>> 16) & 0xff,
+          (unixSeconds >>> 8) & 0xff,
+          unixSeconds & 0xff,
+        ]),
+
+  /** Set the device clock. Observed as `TIME 00 <unix:4>`; our mask answered TIMEERR. UNVERIFIED. */
+  setTime: (unixSeconds) =>
+    encodeCommand('TIME', [
+      0,
+      (unixSeconds >>> 24) & 0xff,
+      (unixSeconds >>> 16) & 0xff,
+      (unixSeconds >>> 8) & 0xff,
+      unixSeconds & 0xff,
+    ]),
 
   // Below: present in the original reddit-derived notes but in NONE of the three working
   // implementations. Unverified — expect these to need adjustment.
@@ -439,6 +497,58 @@ export function buildUploadPackets(payload) {
     packets.push(packet);
   }
   return packets;
+}
+
+/**
+ * Build a full-face DIY image: raw RGB, 3 bytes per pixel, no bitmap section.
+ *
+ * `colorAt(x, y)` returns [r, g, b] with x in [0, DIY_WIDTH) and y in [0, DIY_HEIGHT).
+ * Pixel order is not yet confirmed from the capture (both images differ throughout, so there was no
+ * single-pixel diff to read it from) — hence `rowMajor`, which is trivial to settle on hardware.
+ */
+export function buildImagePayload(colorAt, { rowMajor = true } = {}) {
+  const out = new Uint8Array(DIY_IMAGE_BYTES);
+  let i = 0;
+  if (rowMajor) {
+    for (let y = 0; y < DIY_HEIGHT; y++)
+      for (let x = 0; x < DIY_WIDTH; x++) {
+        const [r, g, b] = colorAt(x, y);
+        out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
+      }
+  } else {
+    for (let x = 0; x < DIY_WIDTH; x++)
+      for (let y = 0; y < DIY_HEIGHT; y++) {
+        const [r, g, b] = colorAt(x, y);
+        out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
+      }
+  }
+  return out;
+}
+
+/**
+ * DIY image upload: DATS(image mode, slot) -> DATSOK -> (packet -> REOK)* -> DATCP(ts) -> DATCPOK.
+ * Same packet framing as the text path; only the header and payload format differ.
+ */
+export function* imageUploadSequence(payload, slot, unixSeconds) {
+  const expect = (response, wanted) => {
+    if (!response?.startsWith(wanted)) {
+      throw new Error(`image upload: expected ${wanted}, got ${JSON.stringify(response)}`);
+    }
+  };
+  expect(
+    yield {
+      characteristic: CHARACTERISTIC.command,
+      data: command.beginImageUpload(payload.length, slot),
+    },
+    'DATSOK',
+  );
+  for (const packet of buildUploadPackets(payload)) {
+    expect(yield { characteristic: CHARACTERISTIC.upload, data: packet }, 'REOK');
+  }
+  expect(
+    yield { characteristic: CHARACTERISTIC.command, data: command.finishUpload(unixSeconds) },
+    'DATCPOK',
+  );
 }
 
 /**

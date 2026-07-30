@@ -17,6 +17,10 @@ import {
   buildUploadPayload,
   buildCommandFrame,
   buildFullColorPayload,
+  buildImagePayload,
+  DIY_WIDTH,
+  DIY_HEIGHT,
+  DIY_IMAGE_BYTES,
   encryptEcb,
 } from './mask-protocol.js';
 
@@ -488,6 +492,135 @@ function ColorBank() {
  * The test pattern varies hue horizontally AND brightness vertically. The vertical variation is the
  * tell: per-column color physically cannot produce it, so if we see it, full-color works.
  */
+/**
+ * Full-colour DIY image upload — the path decoded from a capture of the official app.
+ *
+ *   DATS [total:2][slot:2][0x01]  ->  DATSOK
+ *   packets                       ->  REOK each
+ *   DATCP [unixTimestamp:4]       ->  DATCPOK
+ *
+ * Payload is raw RGB, 3 bytes per pixel, 46 x 58 = 8004 bytes. Unlike the text path this writes a
+ * PERSISTENT slot, addressable afterwards with PLAY.
+ */
+function DiyImage() {
+  const [slot, setSlot] = useState(5);
+  const [rowMajor, setRowMajor] = useState(true);
+  const [source, setSource] = useState('gradient');
+  const [progress, setProgress] = useState('');
+  const [pixels, setPixels] = useState(null); // Uint8ClampedArray RGBA, DIY_WIDTH x DIY_HEIGHT
+  const canvasRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const patternAt = (x, y) => {
+    if (source === 'gradient')
+      return hslToRgb((x / (DIY_WIDTH - 1)) * 330, 1, 0.15 + 0.7 * (y / (DIY_HEIGHT - 1)));
+    if (source === 'quadrants')
+      return x < DIY_WIDTH / 2
+        ? (y < DIY_HEIGHT / 2 ? [255, 0, 0] : [0, 255, 0])
+        : (y < DIY_HEIGHT / 2 ? [0, 0, 255] : [255, 255, 0]);
+    // 'corner': a single bright marker top-left, everything else dim. Settles pixel order.
+    return x < 6 && y < 6 ? [255, 0, 0] : [8, 8, 8];
+  };
+
+  const colorAt = (x, y) => {
+    if (!pixels) return patternAt(x, y);
+    const i = (y * DIY_WIDTH + x) * 4;
+    return [pixels[i], pixels[i + 1], pixels[i + 2]];
+  };
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const scale = 5;
+    c.width = DIY_WIDTH * scale;
+    c.height = DIY_HEIGHT * scale;
+    const ctx = c.getContext('2d');
+    for (let y = 0; y < DIY_HEIGHT; y++)
+      for (let x = 0; x < DIY_WIDTH; x++) {
+        ctx.fillStyle = rgbToHex(colorAt(x, y));
+        ctx.fillRect(x * scale, y * scale, scale, scale);
+      }
+  }, [source, pixels]);
+
+  const loadFile = (file) => {
+    if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      // Cover-fit into 46x58, then read back the downscaled pixels.
+      const c = document.createElement('canvas');
+      c.width = DIY_WIDTH;
+      c.height = DIY_HEIGHT;
+      const ctx = c.getContext('2d');
+      const scale = Math.max(DIY_WIDTH / img.width, DIY_HEIGHT / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, (DIY_WIDTH - w) / 2, (DIY_HEIGHT - h) / 2, w, h);
+      setPixels(ctx.getImageData(0, 0, DIY_WIDTH, DIY_HEIGHT).data);
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(file);
+  };
+
+  const upload = async () => {
+    const payload = buildImagePayload(colorAt, { rowMajor });
+    setProgress(`uploading ${payload.length}B to slot ${slot}…`);
+    const t0 = performance.now();
+    await mask.uploadImage(payload, slot, {
+      onProgress: (n) => setProgress(`packet ${n}/${Math.ceil(payload.length / 98)}`),
+    });
+    setProgress(`done in ${Math.round(performance.now() - t0)}ms — now send PLAY ${slot}`);
+    await new Promise((r) => setTimeout(r, 300));
+    await mask.sendCommand(command.play(slot), `PLAY ${slot}`);
+  };
+
+  return html`
+    <${Section} title="DIY image — full color, persistent"
+      note=${`Decoded from a capture of the official app. Raw RGB, 3 bytes per pixel, ${DIY_WIDTH}x${DIY_HEIGHT}
+              = ${DIY_IMAGE_BYTES} bytes, written to a persistent slot you can recall with PLAY.`}>
+      <canvas ref=${canvasRef} class="preview"></canvas>
+
+      <div class="row wrap">
+        <span class="lbl">Source</span>
+        ${[['gradient', 'gradient'], ['quadrants', 'quadrants'], ['corner', 'corner marker']].map(
+          ([key, label]) => html`
+            <button class=${source === key && !pixels ? 'primary' : ''}
+              onClick=${() => { setPixels(null); setSource(key); }}>${label}</button>
+          `,
+        )}
+        <button class=${pixels ? 'primary' : ''} onClick=${() => fileRef.current?.click()}>
+          image file…
+        </button>
+        <input ref=${fileRef} type="file" accept="image/*" style="display:none"
+          onChange=${(e) => loadFile(e.target.files?.[0])} />
+      </div>
+
+      <div class="row wrap">
+        <label class="row"><span class="lbl">Slot</span>
+          <input type="number" min="0" max="255" value=${slot}
+            onInput=${(e) => setSlot(+e.target.value)} /></label>
+        <span class="lbl">Pixel order</span>
+        <button class=${rowMajor ? 'primary' : ''} onClick=${() => setRowMajor(true)}>row-major</button>
+        <button class=${!rowMajor ? 'primary' : ''} onClick=${() => setRowMajor(false)}>column-major</button>
+      </div>
+      <p class="note">
+        Pixel order isn't pinned down yet — the two captured images differed everywhere, so there was
+        no single-pixel diff to read it from. Use <b>corner marker</b>: if the red square lands
+        top-left, this order is right; if it smears into a stripe, switch.
+      </p>
+
+      <div class="row wrap">
+        <${Btn} kind="primary" onClick=${upload}>
+          Upload ${DIY_IMAGE_BYTES}B to slot ${slot}, then PLAY
+        <//>
+      </div>
+      ${progress && html`<p class="status">${progress}</p>`}
+      <p class="note">
+        ~82 packets, so expect a couple of seconds. This overwrites whatever is in slot ${slot}.
+      </p>
+    <//>
+  `;
+}
+
 function UploadLab() {
   const [width, setWidth] = useState(46);
   const [trailing, setTrailing] = useState(0);
@@ -787,6 +920,7 @@ function App() {
       <${DiySlots} />
       <${ColorBank} />
       <${Appearance} />
+      <${DiyImage} />
       <${Upload} />
       <${UploadLab} />
       <${Experiments} />

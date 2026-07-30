@@ -155,9 +155,46 @@ pure red renders red, so the order is **RGB** and **[go]** was right.
 probably selecting a colour *source* — e.g. `0` = use the gradient/mode from `M`, `1` = use these
 literal bytes — rather than being a plain on/off.
 
-### The full-color question
+### SOLVED: the DIY image path
 
-**Open, and the most valuable thing left to answer.** Two facts point in opposite directions:
+A decrypted HCI capture of the official app writing two DIY images settled it. It is **the same
+`DATS` verb** — the unexplained 5th arg byte is a **mode selector**, and it changes how field 2 and
+the payload are read:
+
+| Mode byte | Field 2 | Payload | Target |
+|---|---|---|---|
+| `0x00` — text | `bitmapLen` | `[1-bit bitmap][one RGB per column]` | live display, 16-row band |
+| `0x01` — image | **destination slot** | **raw RGB, 3 bytes per pixel** | **persistent slot** |
+
+Observed frames:
+
+```
+DATS  1f 44  00 05  01     -> DATSOK      8004 bytes into slot 5
+  ... 82 packets, REOK each
+DATCP 6a 6b 55 a3          -> DATCPOK     4-byte big-endian Unix timestamp
+DATS  1f 44  00 06  01     -> DATSOK      the second image, slot 6
+```
+
+`0x1f44` = **8004** = 46 × 58 × 3, which also pins the **panel at 46 × 58** — consistent with the
+16-row text band covering about a third of the face (16/58 = 28%).
+
+Note `DATCP` carries a **4-byte Unix timestamp** in image mode (text mode sends no args). A `TIME`
+verb also appeared (`TIME 00 <unix:4>`), to which this mask replied **`TIMEERR`**.
+
+This vindicates the original **[rd]** note — *"payload is raw RGB, 3 bytes per pixel"* — which this
+repo had discarded in favour of **[go]**'s per-column format. Both were right, for different modes.
+
+It also explains an earlier anomaly: a `DATS` 5th-byte sweep at width 10 had `bitmapLen = 20`, so
+when the sweep reached mode `01` it wrote **slot 20**, filling it with the bitmap's `ff ff ff` bytes
+read as white pixels. That was dismissed as coincidence at the time; it was the mechanism working.
+
+**Still unconfirmed:** pixel order (row-major vs column-major). Both captured images differed
+throughout, so there was no single-pixel diff to read it from. Trivial to settle on hardware with a
+corner marker.
+
+### The old full-color question
+
+_Superseded by the above; kept for the reasoning trail._ Two facts point in opposite directions:
 
 - The official app's DIY images are **full color** — so the hardware *can* address colour per pixel.
 - The only upload format we have implemented is 1-bit bitmap + one RGB per column, which physically
