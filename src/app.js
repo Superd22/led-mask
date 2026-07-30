@@ -93,16 +93,6 @@ function solidColorPayload(rgb, columns) {
   return buildUploadPayload(encodeBitmap(cols), encodeColors(cols.map(() => rgb)));
 }
 
-const BANK_KEY = 'led-mask.colorBank';
-const loadBank = () => {
-  try {
-    return JSON.parse(localStorage.getItem(BANK_KEY)) || null;
-  } catch {
-    return null;
-  }
-};
-const saveBank = (bank) => localStorage.setItem(BANK_KEY, JSON.stringify(bank));
-
 // ---------------------------------------------------------------- primitives
 
 const Section = ({ title, note, children }) => html`
@@ -360,125 +350,122 @@ function Upload() {
 }
 
 /**
- * Preload a bank of solid colours into DIY slots, then switch between them with one PLAY command.
+ * Colour control.
  *
- * This is the frame-bank architecture in miniature, and the pattern the visualizer will reuse: pay
- * the slow upload cost once, then switch indices at ~24 Hz. It also implements design rule 6 — the
- * mask cannot be queried, so the slot→colour mapping is persisted here and treated as authoritative.
+ * Hardware findings, 2026-07-30, that shape this panel:
+ *  - Upload writes the LIVE display buffer, not a PLAY-addressable DIY slot. 20 uploads followed by
+ *    PLAY 1..3 still showed the pre-existing official-app DIY images.
+ *  - An uploaded bitmap renders, but its per-column RGB is IGNORED — a red fill came out white.
+ *    Consistent with the fact that no known implementation ever uploaded a non-white colour array:
+ *    mask-go hardcodes 0xFFFFFF, and the official-app capture is 0xFFFFFC.
+ *  - So colour most likely comes from FC/BC, gated by their `enable` byte.
+ *
+ * Which gives a much better architecture than per-pick upload: prime the shape once (slow), then
+ * recolour with a single 16-byte command (fast enough for the visualizer).
  */
 function ColorBank() {
-  const saved = loadBank();
-  const [count, setCount] = useState(saved?.slots?.length ?? 20);
-  const [width, setWidth] = useState(saved?.width ?? 32);
-  const [firstSlot, setFirstSlot] = useState(saved?.firstSlot ?? 1);
-  const [selectFirst, setSelectFirst] = useState(saved?.selectFirst ?? true);
-  const [bank, setBank] = useState(saved?.slots ?? null);
-  const [progress, setProgress] = useState('');
+  const [count, setCount] = useState(20);
+  const [width, setWidth] = useState(46); // measured on real hardware
+  const [enable, setEnable] = useState(1);
+  const [status, setStatus] = useState('');
   const [active, setActive] = useState(null);
-  const cancelRef = useRef(false);
+  const [lastMs, setLastMs] = useState(null);
 
   const palette = Array.from({ length: count }, (_, i) => ({
-    slot: firstSlot + i,
+    i,
     hex: rgbToHex(hslToRgb((i * 360) / count)),
   }));
 
-  const uploadAll = async () => {
-    cancelRef.current = false;
-    // Solid fills only make sense static; scrolling would just slide a flat colour around.
-    await mask.sendCommand(command.mode(MODE.steady), 'MODE steady');
-
-    const written = [];
-    for (const [i, entry] of palette.entries()) {
-      if (cancelRef.current) {
-        setProgress(`cancelled after ${i} of ${palette.length}`);
-        break;
-      }
-      setProgress(`slot ${entry.slot} (${i + 1}/${palette.length}) — ${entry.hex}`);
-
-      // If the mask writes into the *currently selected* slot, this is what targets it.
-      if (selectFirst) {
-        await mask.sendCommand(command.play(entry.slot), `PLAY ${entry.slot} (target)`);
-        await new Promise((r) => setTimeout(r, 150));
-      }
-
-      const { payload, bitmapLength } = solidColorPayload(hexToRgb(entry.hex), width);
-      await mask.upload(payload, bitmapLength);
-      written.push(entry);
-      setBank([...written]);
-      saveBank({ slots: written, width, firstSlot, selectFirst, at: Date.now() });
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    if (!cancelRef.current) setProgress(`done — ${written.length} slots written`);
+  const timed = async (label, fn) => {
+    const t0 = performance.now();
+    await fn();
+    const ms = Math.round(performance.now() - t0);
+    setLastMs(ms);
+    setStatus(`${label} — ${ms}ms`);
   };
 
-  const pick = async (entry) => {
-    setActive(entry.slot);
-    await mask.sendCommand(command.play(entry.slot), `PLAY ${entry.slot} → ${entry.hex}`);
+  /** Upload a full-width, fully-lit white rectangle: the canvas that FC then recolours. */
+  const primeCanvas = () =>
+    timed(`primed ${width}-column canvas`, async () => {
+      await mask.sendCommand(command.mode(MODE.steady), 'MODE steady');
+      const { payload, bitmapLength } = solidColorPayload([255, 255, 255], width);
+      await mask.upload(payload, bitmapLength);
+    });
+
+  const pickFC = (entry) => {
+    setActive(entry.i);
+    const [r, g, b] = hexToRgb(entry.hex);
+    return timed(`FC ${entry.hex}`, () =>
+      mask.sendCommand(command.foregroundColor(r, g, b, enable), `FC ${entry.hex} en=${enable}`),
+    );
+  };
+
+  const pickUpload = (entry) => {
+    setActive(entry.i);
+    return timed(`upload ${entry.hex}`, async () => {
+      const { payload, bitmapLength } = solidColorPayload(hexToRgb(entry.hex), width);
+      await mask.upload(payload, bitmapLength);
+    });
   };
 
   return html`
-    <${Section} title="Color bank"
-      note=${`Uploads solid colours into DIY slots, then switches with one PLAY command. Upload is slow
-              (~6 round trips each); switching afterwards is not. The slot mapping lives in
-              localStorage because the mask cannot be asked what it holds.`}>
+    <${Section} title="Color"
+      note=${`Upload writes the live display, not a DIY slot — confirmed on hardware. And an uploaded
+              per-column RGB is ignored, so colour has to come from FC. Prime the shape once, then
+              recolour with one command.`}>
       <div class="row wrap">
         <label class="row"><span class="lbl">Colors</span>
-          <input type="number" min="1" max=${21} value=${count}
+          <input type="number" min="1" max="64" value=${count}
             onInput=${(e) => setCount(Math.max(1, +e.target.value))} /></label>
-        <label class="row"><span class="lbl">First slot</span>
-          <input type="number" min="0" max="255" value=${firstSlot}
-            onInput=${(e) => setFirstSlot(+e.target.value)} /></label>
-        <label class="row"><span class="lbl">Width (columns)</span>
+        <label class="row"><span class="lbl">Canvas width</span>
           <input type="number" min="1" max="255" value=${width}
             onInput=${(e) => setWidth(Math.max(1, +e.target.value))} /></label>
       </div>
 
-      <div class="swatches">
+      <div class="row wrap">
+        <${Btn} kind="primary" onClick=${primeCanvas}>1. Prime ${width}-col white canvas<//>
+        <${Btn} onClick=${() => mask.sendCommand(command.textColorMode(0, 0), 'M enable=0')}>
+          Clear color mode (M en=0)
+        <//>
+      </div>
+      <p class="note">
+        46 columns measured on hardware — a 32-column upload rendered as a partial rectangle.
+      </p>
+
+      <hr />
+      <h3 class="sub">2. Pick a color — one FC command</h3>
+      <label class="row">
+        <span class="lbl">FC enable byte</span>
+        <button class=${enable === 1 ? 'primary' : ''} onClick=${() => setEnable(1)}>1</button>
+        <button class=${enable === 0 ? 'primary' : ''} onClick=${() => setEnable(0)}>0</button>
+        <span class="note">
+          The official app sends 0. If 1 does nothing, try 0 — this byte is the whole hypothesis.
+        </span>
+      </label>
+      <div class="swatches pickable">
         ${palette.map((entry) => html`
-          <div class="swatch" style=${`background:${entry.hex}`} title=${`slot ${entry.slot} ${entry.hex}`}>
-            <span>${entry.slot}</span>
-          </div>
+          <button class=${`swatch ${active === entry.i ? 'active' : ''}`}
+            style=${`background:${entry.hex}`} title=${entry.hex}
+            onClick=${() => pickFC(entry)}></button>
+        `)}
+      </div>
+      ${lastMs !== null && html`<p class="status">${status}</p>`}
+      <p class="note">
+        If FC works, this is the visualizer's colour axis: ~30ms per change, so 24 Hz is comfortable.
+      </p>
+
+      <hr />
+      <h3 class="sub">Fallback — one full upload per pick (~300ms)</h3>
+      <div class="swatches pickable">
+        ${palette.map((entry) => html`
+          <button class="swatch" style=${`background:${entry.hex}`} title=${entry.hex}
+            onClick=${() => pickUpload(entry)}></button>
         `)}
       </div>
       <p class="note">
-        ${width} columns → ${width * 5} bytes per image, ${Math.ceil((width * 5) / 98)} packet(s) each.
+        Uses the per-column RGB, which hardware says is ignored — kept so the two are easy to compare
+        side by side. Measured ~300-350ms per upload from your logs.
       </p>
-
-      <label class="row">
-        <input type="checkbox" checked=${selectFirst}
-          onChange=${(e) => setSelectFirst(e.target.checked)} />
-        <span>Send <code>PLAY n</code> before each upload to target the slot</span>
-      </label>
-      <p class="note">
-        DATS carries no slot index, so nobody knows how the mask chooses a destination. With this on we
-        select the slot first, which is the most plausible mechanism. If all 20 colours land in one
-        slot, turn it off and see whether uploads append instead.
-      </p>
-
-      <div class="row wrap">
-        <${Btn} kind="primary" onClick=${uploadAll}>Upload ${count} colors to slots<//>
-        <${Btn} onClick=${() => { cancelRef.current = true; }}>Cancel<//>
-        <${Btn} onClick=${() => { setBank(null); localStorage.removeItem(BANK_KEY); setProgress(''); }}>
-          Forget mapping
-        <//>
-      </div>
-      ${progress && html`<p class="status">${progress}</p>`}
-
-      ${bank?.length ? html`
-        <hr />
-        <h3 class="sub">Picker — ${bank.length} slot${bank.length > 1 ? 's' : ''} known</h3>
-        <div class="swatches pickable">
-          ${bank.map((entry) => html`
-            <button class=${`swatch ${active === entry.slot ? 'active' : ''}`}
-              style=${`background:${entry.hex}`} title=${`slot ${entry.slot} ${entry.hex}`}
-              onClick=${() => pick(entry)}><span>${entry.slot}</span></button>
-          `)}
-        </div>
-        <p class="note">
-          One PLAY command per pick. Survives reload; it will NOT survive the official app overwriting
-          a slot — re-upload if the colours stop matching.
-        </p>
-      ` : null}
     <//>
   `;
 }
@@ -486,12 +473,12 @@ function ColorBank() {
 function Experiments() {
   const [result, setResult] = useState('');
   const sweep = async () => {
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 30; i++) {
       setResult(`PLAY ${i} — watch the mask`);
       await mask.sendCommand(command.play(i), `PLAY ${i}`);
       await new Promise((r) => setTimeout(r, 1200));
     }
-    setResult('sweep done — how many distinct images did you see?');
+    setResult('sweep done — how many distinct images, and did any uploaded color appear?');
   };
 
   return html`
@@ -500,16 +487,23 @@ function Experiments() {
       <div class="stack">
         <div class="row wrap">
           <${Btn} onClick=${async () => {
-            await mask.sendCommand(command.foregroundColor(255, 0, 0), 'FC pure red');
-            setResult('FC sent as (r=255,g=0,b=0). Red on the mask → order is RGB. Blue → it is R,B,G.');
-          }}>Settle FC byte order<//>
+            await mask.sendCommand(command.foregroundColor(255, 0, 0, 1), 'FC red en=1');
+            await new Promise((r) => setTimeout(r, 1200));
+            await mask.sendCommand(command.foregroundColor(255, 0, 0, 0), 'FC red en=0');
+            setResult('FC red sent with enable=1, then enable=0. Which one changed the face? ' +
+              'Red → byte order is RGB; blue → it is R,B,G.');
+          }}>Settle FC (both enable values)<//>
+          <${Btn} onClick=${async () => {
+            await mask.sendCommand(command.backgroundColor(0, 0, 255, 1), 'BC blue en=1');
+            setResult('BC blue sent. If the unlit area turns blue, BC drives the background.');
+          }}>Try BC<//>
           <${Btn} onClick=${async () => {
             await mask.sendCommand(command.checkCount(), 'CHEC');
             setResult('CHEC sent — anything in the log? That would give us an image count.');
           }}>Try CHEC (unverified)<//>
         </div>
         <div class="row wrap">
-          <${Btn} onClick=${sweep}>Sweep PLAY 1→20 (find the slot count)<//>
+          <${Btn} onClick=${sweep}>Sweep PLAY 1→30 (find slots / where uploads land)<//>
           <${Btn} onClick=${async () => {
             await mask.sendCommand(command.image(5), 'IMAG 5 with len=5');
             await mask.sendCommand(

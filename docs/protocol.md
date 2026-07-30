@@ -2,6 +2,26 @@
 
 Reverse-engineered, not official. Nothing here is endorsed by the manufacturer.
 
+## Hardware findings
+
+Observed on a real `MASK-9C2F6A` on 2026-07-30. **These supersede anything inferred from source code
+below.** Where a claim here contradicts a source, this wins.
+
+| Finding | Detail |
+|---|---|
+| **Discovery and connect work** | `namePrefix: 'MASK'` + service `0xfff0` resolves; unbonded, no OS pairing. `startNotifications()` on `…9601` succeeds. |
+| **Display is 46 columns** wide, 16 high | Measured: a 32-column upload rendered as a partial rectangle. No source states this. |
+| **Upload writes the LIVE display, not a DIY slot** | 20 successful uploads (every step ACKed), then `PLAY 1…3` still showed the pre-existing official-app DIY images. `DATS` carries no slot index because there is no slot to address. |
+| **Uploaded per-column RGB is IGNORED** | A red fill rendered **white**. Consistent with no source ever having uploaded a non-white colour array: mask-go hardcodes `0xFFFFFF`, the official-app capture is `0xFFFFFC`. Colour most likely comes from `FC`/`BC` and their `enable` byte. |
+| **`PLAY` switching works** | Returns `PLAYOK` every time. DIY slots are real and persistent — but authored by the official app, not by us. |
+| **Upload costs ~300–350 ms** | Measured over 20 sequential uploads at 46 columns (3 packets each). |
+| **A command round trip is ~11 ms** | Single 16-byte write, e.g. `FC`. Comfortably 24 Hz. |
+
+The practical consequence: there are **two display paths, with very different costs.** `PLAY` over
+official-app-authored slots is the fast one (~11 ms, good for the visualizer). Upload is the slow one
+(~300 ms) and is the only way to put *your own* bitmap on the face, but it lands in a transient buffer
+and you don't control its colour through the payload.
+
 ## Sources
 
 | Tag | Source | What it is |
@@ -191,14 +211,23 @@ FFFF0000 FFFF0000 FFFF0000 FFFF0000   FF0000 FF0000 00FF00 00FF00 FF0000 FF0000 
 (16 bytes of bitmap + 24 bytes of color = 40; the README's arithmetic says 36, which doesn't add up
 either way — trust the format description, not the total.)
 
-**The key constraint this imposes: one color per column.** You cannot upload an arbitrary full-color
-image. Each 16-pixel column is on/off per pixel, with a single RGB shared by the whole column. Any
-image pipeline has to reduce to that.
+**⚠️ The colour section appears to be ignored.** On hardware, a red fill rendered white. Every source
+that uploads sends white or near-white (mask-go hardcodes `0xFFFFFF`; the official-app capture is
+`0xFFFFFC`), so nobody has ever demonstrated the colour array having an effect. Colour is most likely
+governed by `FC`/`BC` and their `enable` byte instead. Still send a well-formed colour section — the
+lengths in `DATS` depend on it — but don't expect it to control anything.
 
-Display **width** is not stated by any source. Text is variable-width and scrolls, so uploads are not
-required to match a fixed width.
+Even if it did work, it would be **one colour per column**: each 16-pixel column is on/off per pixel
+with a single shared RGB. No arbitrary full-colour images either way.
+
+**Display width is 46 columns**, measured on hardware — a 32-column upload rendered as a partial
+rectangle. No source states this, and text is variable-width and scrolls, so uploads are not *required*
+to match; but 46 is what fills the face.
 
 ## Timing
+
+**Measured on hardware:** a single 16-byte command round trip is **~11 ms**; a full 46-column upload
+(3 packets, notification-gated) is **~300–350 ms**. So commands are ~30× cheaper than uploads.
 
 **Measured, from [cp]:** it schedules an unconditional `PLAY` write every `1000/24` ms — **24 Hz
 sustained**, no deduplication, no dropped-frame handling — and animates blinks at 12 distinct frames
@@ -218,9 +247,11 @@ So single-block command writes are good for **at least ~24 Hz**, which is comfor
 
 ## DIY slot limits
 
-### The known protocol cannot write a DIY slot — only select one
+### Confirmed on hardware: uploads do not write DIY slots
 
-This is the important one, and it's easy to miss.
+**Settled.** 20 successful uploads followed by `PLAY 1…3` still showed the pre-existing official-app
+DIY images. `PLAY n` selects a slot; nothing we can send writes one. The source evidence below all
+pointed this way and is now confirmed.
 
 - **`PLAY n` selects slot `n`. Nothing in any of the four sources writes slot `n`.** There is no
   slot-addressing verb, and critically **`DATS` takes no slot parameter** — it declares a total
@@ -232,15 +263,13 @@ This is the important one, and it's easy to miss.
 - **[cp]**'s README says it outright: *"Make sure that you load some custom images to the mask before
   trying this."* It only ever switches between slots the official app populated.
 
-So the upload path looks like a **live display** channel (it's the text/scrolling-bitmap path — note
-that `MODE`, `SPEED`, `M`, `FC` and `BC` are all text-oriented), not slot storage. Whether an upload
-persists into a slot at all is **unknown**; no source demonstrates it.
+So the upload path is the **live display** channel — the text/scrolling-bitmap path, which fits with
+`MODE`, `SPEED`, `M`, `FC` and `BC` all being text-oriented.
 
-**Consequence for a frame-bank design:** you may only be able to populate the bank *by hand via the
-official app*, then switch indices from your own code. That's still fine for a performance rig —
-preload once, `PLAY` at 24 Hz — but "the PWA uploads its own frame bank" is not a capability any
-source supports yet. Worth an early hardware experiment: upload, then power-cycle, then `PLAY`
-through the indices and see if anything new appears.
+**Consequence for a frame-bank design:** the bank must be authored **by hand in the official app**,
+after which your own code can switch indices freely. "The PWA uploads its own frame bank" is not
+possible with the protocol as understood. That is still fine for a performance rig — author once,
+`PLAY` at 24 Hz — it just isn't self-service.
 
 ### Numeric bounds
 

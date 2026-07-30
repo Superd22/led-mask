@@ -3,8 +3,9 @@
 Controlling a **Shining Mask** (BLE LED face mask) from the browser — a control app for the phone,
 and a MIDI relay from Ableton on the Mac.
 
-Right now this repo is **research and a decision note**, not a working app. It captures the protocol,
-the platform feasibility work, and the gotchas worth knowing before writing code.
+**Live: https://superd22.github.io/led-mask/** — a control surface and protocol test harness, working
+against real hardware. No build step: native ESM plus a vendored 13 KB Preact+htm, so the source
+deploys straight to GitHub Pages.
 
 ## Verdict: a PWA is the right fit
 
@@ -35,8 +36,10 @@ installed PWA on iPhone cannot do either. Target is Android; not blocking.
 - [`src/mask-protocol.js`](src/mask-protocol.js) — reference implementation of the command encoding,
   the upload handshake, and the AES-ECB workarounds
 - [`src/mask-protocol.test.mjs`](src/mask-protocol.test.mjs) — verifies that encoding against real
-  AES and against the exact bytes the two working implementations send
-  (`node src/mask-protocol.test.mjs`)
+  AES and against decrypted captures of the official app (`node src/mask-protocol.test.mjs`)
+- [`src/mask-transport.js`](src/mask-transport.js) — Web Bluetooth layer: connect, the upload state
+  machine, and the coalescing writer for high-rate paths
+- [`src/app.js`](src/app.js) + [`index.html`](index.html) — the UI
 
 ## Nothing left to sniff
 
@@ -65,12 +68,13 @@ the path.
    services — unlike bleak, you cannot write to a characteristic and let the stack find the service.
 3. **Upload is a notification handshake, not a paced write loop.** `DATS` → `DATSOK` → (packet →
    `REOK`)* → `DATCP` → `DATCPOK`. Don't use `writeValueWithoutResponse()` for the packets.
-4. **Uploaded images are one color per 16-pixel column** — a 1-bit bitmap plus a per-column RGB
-   array. You cannot push an arbitrary full-color image.
-5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; index
-   switching runs at ~24 Hz on real hardware, which is plenty.
-6. **The mask is write-only storage.** No verb lists what images are on the device, so the app has to
-   own the slot inventory and offer a full re-upload to recover from desync.
+4. **Upload writes the live display, not a DIY slot** (confirmed on hardware). `PLAY` only *selects*
+   slots, and only the official app can author them. And the uploaded per-column RGB is **ignored** —
+   a red fill renders white — so colour comes from `FC`/`BC` instead.
+5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; commands are
+   ~11 ms on real hardware, so 24 Hz is comfortable. Uploads are ~300 ms, so they are not per-frame.
+6. **The mask cannot be queried.** No verb lists what is on the device, so the app owns its inventory.
+7. **The display is 46 columns × 16 rows** on the unit tested. No public source states this.
 
 ## Credits
 

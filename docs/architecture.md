@@ -18,9 +18,9 @@ target is Android, so this is not blocking.
 
 ## The two roles
 
-**Role A — mobile control (Android PWA).** Feature parity with the official app: browse and select
-built-in images (`IMAG`), animations (`ANIM`), brightness (`LIGHT`), speed (`SPEED`), DIY playlists
-(`PLAY`), and custom uploads (`DATS` + chunked writes). Upload is the only slow path.
+**Role A — mobile control (Android PWA).** Select built-in images (`IMAG`), animations (`ANIM`),
+brightness (`LIGHT`), speed (`SPEED`), DIY slots (`PLAY`), colour (`FC`/`BC`), and push live bitmaps
+(`DATS` + chunked writes). Upload is the only slow path, and it cannot author DIY slots.
 
 **Role B — MIDI relay (macOS Chrome PWA).** Ableton → IAC Driver virtual bus →
 `navigator.requestMIDIAccess()` → map note/CC to mask commands → Web Bluetooth. No native app and
@@ -46,11 +46,11 @@ Both roles are one app; the Mac tab can also do Role A.
 5. **Keep the command encoding transport-agnostic.** Put protocol encoding in a module that doesn't
    know whether it's talking to Web Bluetooth or a WebSocket — that's what makes the untethered
    options below a transport swap rather than a rewrite.
-6. **The app owns the slot inventory.** Nothing in the protocol lists what images are on the device —
-   see [protocol.md](protocol.md#no-way-to-enumerate-whats-on-the-device). Persist the record of
-   what's in which DIY slot locally (IndexedDB) at upload time, and ship a "re-upload the whole bank"
-   action, because that local record silently desynchronises the moment the official app touches the
-   mask. Don't build UI that implies the mask was queried.
+6. **The mask cannot be queried, and we cannot author its slots.** Nothing lists what's on the device
+   (see [protocol.md](protocol.md#no-way-to-enumerate-whats-on-the-device)) and uploads don't write
+   slots, so the DIY bank is authored in the official app and our side keeps only a local *label* for
+   each index. Treat that mapping as a user-editable guess, not a fact, and never build UI implying
+   the mask was asked.
 
 ## Connection UX: how hands-off can it get?
 
@@ -110,11 +110,11 @@ official app.
 
 So the visualizer is host-side, and it's realistic within the transport budget above:
 
-- **Preload a frame bank**, then drive `PLAY` index switches from audio features at 12–24 Hz. ⚠️ But
-  see [protocol.md](protocol.md#diy-slot-limits): nothing in the known protocol *writes* a DIY slot —
-  `PLAY` only selects one, and `DATS` takes no slot parameter. Populating the bank may require the
-  official app. Plan the visualizer around ~20 preloaded slots (shining-mask's assumption) and treat
-  programmatic bank upload as unproven until tested on hardware.
+- **Author the frame bank in the official app**, then drive `PLAY` index switches from audio features
+  at 12–24 Hz. Confirmed on hardware: uploads write the *live display*, not a slot, so the PWA cannot
+  populate the bank itself — see
+  [protocol.md](protocol.md#confirmed-on-hardware-uploads-do-not-write-diy-slots). `PLAY` is ~11 ms,
+  so index switching is comfortably fast.
 - **`FC`/`BC` color commands cost exactly the same as `PLAY`** — one encrypted 16-byte write. That
   gives an orthogonal color axis for free: shape from the frame bank, hue/brightness from the
   spectrum.
@@ -124,8 +124,10 @@ So the visualizer is host-side, and it's realistic within the transport budget a
   `AnalyserNode`. Role B (Ableton): prefer having Ableton do the analysis and send MIDI CC, which is
   both cheaper and sample-synced to the DAW; capturing system audio into Chrome via a loopback
   device is the fallback.
-- **Remember the one-color-per-column constraint** when designing frames — uploaded images are
-  1-bit-per-pixel with a single RGB per 16-pixel column.
+- **Colour comes from `FC`, not from the uploaded payload.** An uploaded per-column RGB is ignored on
+  hardware (red rendered white). `FC` is a single 16-byte command at ~11 ms, which makes it a genuine
+  second axis: shape from the frame bank, colour from the spectrum, both at 24 Hz.
+- **The display is 46 columns × 16 rows** on the unit tested — measured, not documented anywhere.
 
 ## Deferred: untethered MIDI (no Mac present)
 
