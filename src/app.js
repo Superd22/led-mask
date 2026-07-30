@@ -509,31 +509,57 @@ function ColorBank() {
 /**
  * Sound visualizer — the official app's own protocol, decoded from a capture.
  *
- * The phone does the FFT and streams 24 band levels; the mask renders one of 5 built-in effects.
- * Frame is [0x0f][effect][12 bytes = 24 nibbles][00 00], sent fire-and-forget at ~10 Hz.
+ * The phone does the FFT and streams 24 band levels to the …960b characteristic; the mask renders one
+ * of 5 built-in effects. Frame is [0x0f][effect][12 bytes = 24 nibbles][00 00], fire-and-forget.
  *
- * This is the native path, so it looks exactly like the official app rather than an approximation.
+ * Audio comes from the microphone or a local file. The AudioContext is created once and kept for the
+ * component's lifetime, because createMediaElementSource() binds an element to a context permanently
+ * — tearing the context down would make the file source unusable on the next start.
  */
 function Visualizer() {
   const [running, setRunning] = useState(false);
+  const [source, setSource] = useState('mic');
   const [effect, setEffect] = useState(0);
   const [hz, setHz] = useState(SPECTRUM_HZ);
   const [gain, setGain] = useState(2.2);
+  const [fileName, setFileName] = useState('');
   const [bands, setBands] = useState(() => new Array(SPECTRUM_BANDS).fill(0));
   const [err, setErr] = useState('');
 
-  const audioRef = useRef(null);
+  const audioRef = useRef(null); // {ctx, analyser, bins, micStream, micNode, fileNode}
   const timerRef = useRef(null);
-  // Refs so the streaming loop reads live values instead of the closure it was created with.
+  const elRef = useRef(null); // <audio> for file playback
+  const fileInputRef = useRef(null);
   const live = useRef({ effect, gain, hz });
   live.current = { effect, gain, hz };
+
+  const ensureAudio = () => {
+    if (!audioRef.current) {
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.6;
+      audioRef.current = {
+        ctx, analyser, bins: new Uint8Array(analyser.frequencyBinCount),
+        micStream: null, micNode: null, fileNode: null,
+      };
+    }
+    return audioRef.current;
+  };
 
   const stop = () => {
     clearInterval(timerRef.current);
     timerRef.current = null;
-    audioRef.current?.stream.getTracks().forEach((t) => t.stop());
-    audioRef.current?.ctx.close();
-    audioRef.current = null;
+    const a = audioRef.current;
+    if (a) {
+      try { a.analyser.disconnect(); } catch {}
+      try { a.micNode?.disconnect(); } catch {}
+      try { a.fileNode?.disconnect(); } catch {}
+      a.micStream?.getTracks().forEach((t) => t.stop());
+      a.micStream = null;
+      a.micNode = null;
+    }
+    elRef.current?.pause();
     if (running) mask.log('sys', 'visualizer stopped');
     setRunning(false);
     setBands(new Array(SPECTRUM_BANDS).fill(0));
@@ -542,24 +568,36 @@ function Visualizer() {
   const start = async () => {
     setErr('');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      });
-      const ctx = new AudioContext();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = 0.6;
-      ctx.createMediaStreamSource(stream).connect(analyser);
-      const bins = new Uint8Array(analyser.frequencyBinCount);
-      audioRef.current = { ctx, stream, analyser, bins };
+      const a = ensureAudio();
+      await a.ctx.resume();
+
+      if (source === 'mic') {
+        a.micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        a.micNode = a.ctx.createMediaStreamSource(a.micStream);
+        a.micNode.connect(a.analyser);
+        // Deliberately NOT connected to ctx.destination — that would feed the mic back to the
+        // speakers and howl.
+      } else {
+        const el = elRef.current;
+        if (!el?.src) throw new Error('choose an audio file first');
+        a.fileNode ??= a.ctx.createMediaElementSource(el);
+        a.fileNode.connect(a.analyser);
+        a.analyser.connect(a.ctx.destination); // so you can actually hear it
+        await el.play();
+      }
+
       setRunning(true);
-      mask.log('sys', `visualizer started @ ${live.current.hz}Hz, effect ${live.current.effect}`,
+      mask.log('sys', `visualizer started: ${source}, ${live.current.hz}Hz, effect ${live.current.effect}`,
         null, '', 'ok');
-      if (!mask.connected) mask.log('sys', 'not connected — bars will move but nothing is sent',
-        null, '', 'warn');
+      if (!mask.connected) {
+        mask.log('sys', 'not connected — bars will move but nothing is sent', null, '', 'warn');
+      }
       tick();
     } catch (e) {
       setErr(e.message);
+      stop();
     }
   };
 
@@ -597,13 +635,22 @@ function Visualizer() {
   };
 
   useEffect(() => { if (running) tick(); }, [hz]);
-  useEffect(() => stop, []); // stop the mic when the component goes away
+  useEffect(() => stop, []);
+
+  const pickFile = (file) => {
+    if (!file) return;
+    const el = elRef.current;
+    if (el.src) URL.revokeObjectURL(el.src);
+    el.src = URL.createObjectURL(file);
+    setFileName(file.name);
+    setSource('file');
+  };
 
   return html`
     <${Section} title="Sound visualizer — native"
-      note=${`The official app's own protocol, decoded from a capture: it runs the FFT on the phone and
-              streams ${SPECTRUM_BANDS} band levels (0-${SPECTRUM_MAX}); the mask renders. Frame is
-              [0x0f][effect][12 bytes of nibbles][00 00], fire-and-forget at ~${SPECTRUM_HZ} Hz.`}>
+      note=${`The official app's own protocol: it runs the FFT and streams ${SPECTRUM_BANDS} band levels
+              (0-${SPECTRUM_MAX}) to the undocumented …960b characteristic; the mask renders. Frame is
+              [0x0f][effect][12 bytes of nibbles][00 00], fire-and-forget.`}>
       <div class="bars">
         ${bands.map((v) => html`
           <div class="bar"><div style=${`height:${(v / SPECTRUM_MAX) * 100}%`}></div></div>
@@ -611,8 +658,27 @@ function Visualizer() {
       </div>
 
       <div class="row wrap">
+        <span class="lbl">Audio source</span>
+        <button class=${source === 'mic' ? 'primary' : ''}
+          onClick=${() => { if (running) stop(); setSource('mic'); }}>microphone</button>
+        <button class=${source === 'file' ? 'primary' : ''}
+          onClick=${() => {
+            // Switch back to an already-loaded file rather than forcing a re-pick.
+            if (fileName && source !== 'file') { if (running) stop(); setSource('file'); }
+            else fileInputRef.current?.click();
+          }}>
+          ${fileName ? `file: ${fileName.slice(0, 24)}` : 'audio file…'}
+        </button>
+        ${fileName && html`<button onClick=${() => fileInputRef.current?.click()}>change…</button>`}
+        <input ref=${fileInputRef} type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac"
+          style="display:none" onChange=${(e) => pickFile(e.target.files?.[0])} />
+      </div>
+      <audio ref=${elRef} controls loop class="player"
+        style=${source === 'file' && fileName ? '' : 'display:none'}></audio>
+
+      <div class="row wrap">
         <${Btn} kind=${running ? '' : 'primary'} onClick=${() => (running ? stop() : start())}>
-          ${running ? 'Stop' : 'Start microphone'}
+          ${running ? 'Stop' : `Start (${source})`}
         <//>
         <span class="lbl">Effect</span>
         ${VISUALIZER_EFFECTS.map((e) => html`
@@ -621,15 +687,20 @@ function Visualizer() {
       </div>
 
       <${Slider} label=${`Rate (${hz} Hz)`} value=${hz} setValue=${setHz}
-        onCommit=${() => {}} min=${1} max=${25} />
-      <${Slider} label=${`Gain (${(gain).toFixed(1)}x)`} value=${Math.round(gain * 10)}
-        setValue=${(v) => setGain(v / 10)} onCommit=${() => {}} min=${5} max=${60} />
+        onCommit=${() => {}} min=${1} max=${50} />
+      <${Slider} label=${`Gain (${gain.toFixed(1)}x)`} value=${Math.round(gain * 10)}
+        setValue=${(v) => setGain(v / 10)} onCommit=${() => {}} min=${1} max=${80} />
 
       ${err && html`<p class="warn">${err}</p>`}
       <p class="note">
-        Bands are log-spaced from 40 Hz to 12 kHz — linear FFT bins would pile almost everything into
-        the first few bands. The official app streams at ${SPECTRUM_HZ} Hz; commands cost ~11 ms, so
-        there is headroom above that if you want it.
+        The official app streams at ${SPECTRUM_HZ} Hz. Higher rates are unexplored territory — frames
+        are dropped rather than queued if the link can't keep up, and the log's <code>spectrum N/s</code>
+        heartbeat reports the rate actually achieved plus any drops, so you can find the real ceiling.
+      </p>
+      <p class="note">
+        Bands are log-spaced 40 Hz - 12 kHz; linear FFT bins would pile almost everything into the low
+        end. Playing a file routes audio to your speakers too — the microphone path deliberately does
+        not, to avoid feedback.
       </p>
     <//>
   `;

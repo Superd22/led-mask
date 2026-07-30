@@ -214,18 +214,41 @@ export class MaskTransport extends EventTarget {
     if (!this.connected) throw new Error('not connected');
     const char = this.chars.spectrum;
     if (!char) throw new Error('no visualizer characteristic');
-    const bytes = await bytesOrPromise;
-    if (char.properties?.writeWithoutResponse && char.writeValueWithoutResponse) {
-      await char.writeValueWithoutResponse(bytes);
-    } else {
-      await char.writeValue(bytes);
+
+    // Drop rather than queue. Chrome serialises GATT operations, so at high rates an awaited write
+    // per frame backs the queue up and the mask drifts seconds behind the audio. A dropped frame is
+    // invisible; a growing queue is not. This is design rule 3 applied to the stream.
+    if (this._specBusy) {
+      this._specDropped = (this._specDropped ?? 0) + 1;
+      return;
     }
-    // Heartbeat so the log shows the stream is alive without burying everything at 10 frames/sec.
-    this._specCount = (this._specCount ?? 0) + 1;
+    this._specBusy = true;
+    const bytes = await bytesOrPromise;
+    try {
+      if (char.properties?.writeWithoutResponse && char.writeValueWithoutResponse) {
+        await char.writeValueWithoutResponse(bytes);
+      } else {
+        await char.writeValue(bytes);
+      }
+      this._specCount = (this._specCount ?? 0) + 1;
+    } finally {
+      this._specBusy = false;
+    }
+
+    // Heartbeat so the log shows the stream is alive without burying everything at N frames/sec.
     const now = performance.now();
     if (!this._specLogAt || now - this._specLogAt > 2000) {
+      const sent = this._specCount - (this._specLogSent ?? 0);
+      const dropped = (this._specDropped ?? 0) - (this._specLogDrop ?? 0);
+      const elapsed = this._specLogAt ? (now - this._specLogAt) / 1000 : 1;
       this._specLogAt = now;
-      this.log('out', `spectrum x${this._specCount}`, bytes);
+      this._specLogSent = this._specCount;
+      this._specLogDrop = this._specDropped ?? 0;
+      this.log(
+        'out',
+        `spectrum ${(sent / elapsed).toFixed(0)}/s` + (dropped ? ` (${dropped} dropped)` : ''),
+        bytes,
+      );
     }
   }
 
