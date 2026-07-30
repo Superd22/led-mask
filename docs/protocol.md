@@ -18,6 +18,8 @@ below.** Where a claim here contradicts a source, this wins.
 | **Upload costs ~300–350 ms** | Measured over 20 sequential uploads at 46 columns (3 packets each). |
 | **A command round trip is ~11 ms** | Single 16-byte write, e.g. `FC`. Comfortably 24 Hz. |
 | **`DATS` with `bitmapLen = 0` soft-locks the mask** | Upload animation freezes; power cycle required. Every step still ACKed, so **ACKs do not mean the mask is healthy**. |
+| **`CHEC` works and returns 34** | Reply frame is `[05]["CHEC"][0x22]`. So slots are countable, there are more than the 20 [cp] assumed, and the notify channel does more than upload ACKs. Makes `DELE` likely real too. |
+| **⚠️ "per-column RGB is ignored" is now in doubt** | An uploaded rainbow *did* render as a pattern. If `FC`'s `enable` byte selects a colour *source* (`1` = literal override, `0` = use the content's own colours — which is what the official app always sends), then the earlier white was an active override, not a broken colour section. Being retested. |
 
 The practical consequence: **shape and colour are separate, and both are cheap.**
 
@@ -121,7 +123,7 @@ Byte layouts below are quoted from **[bd]** in its `06LIGHTnn` shorthand, cross-
 | `DATS` | 9 | 2-byte total len, 2-byte bitmap len, 1 zero byte | Begin an upload | **[go][bd]** |
 | `DATCP` | 5 | — | Finish an upload | **[js][go][bd]** |
 | `DELE` | ? | 1 count byte, then indices | Delete uploaded images | **[rd]** only — unverified |
-| `CHEC` | ? | — | Query how many images are uploaded | **[rd]** only — unverified |
+| `CHEC` | 4 | — | Query image count. **Confirmed on hardware**: replies `[05]["CHEC"][count]`, observed `0x22` = **34** | **[rd]** + hardware |
 
 `DELE` and `CHEC` appear in the earlier notes this repo was built from but in **none** of the four
 other sources. Treat them as unconfirmed.

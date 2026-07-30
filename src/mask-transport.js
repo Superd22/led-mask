@@ -118,6 +118,12 @@ export class MaskTransport extends EventTarget {
     let parsed = '';
     try {
       parsed = await parseNotification(bytes);
+      // Render trailing non-printable bytes numerically — CHEC replies with a count byte there.
+      const extra = [...parsed].slice(4).map((c) => c.charCodeAt(0));
+      const printable = parsed.replace(/[^\x20-\x7e]/g, '');
+      if (extra.some((c) => c < 0x20 || c > 0x7e || /[^A-Z]/.test(String.fromCharCode(c)))) {
+        parsed = `${printable} [${extra.map((c) => `0x${c.toString(16)}=${c}`).join(' ')}]`;
+      }
     } catch (err) {
       parsed = `<decrypt failed: ${err.message}>`;
     }

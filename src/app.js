@@ -494,6 +494,7 @@ function UploadLab() {
   const [format, setFormat] = useState('fullcolor');
   const [columnMajor, setColumnMajor] = useState(true);
   const [bitmapLenMode, setBitmapLenMode] = useState('full');
+  const [releaseOverride, setReleaseOverride] = useState(true);
   const [result, setResult] = useState('');
   const canvasRef = useRef(null);
 
@@ -530,6 +531,12 @@ function UploadLab() {
   };
 
   const send = async (t = trailing) => {
+    if (releaseOverride) {
+      // FC enable=0 may mean "use the content's own colours" rather than "off" — the official app
+      // always sends 0. If so, this is why an uploaded colour previously rendered white.
+      await mask.sendCommand(command.foregroundColor(255, 255, 255, 0), 'FC enable=0 (release)');
+      await new Promise((r) => setTimeout(r, 120));
+    }
     const { payload, bitmapLength } = build();
     setResult(`sending ${payload.length}B, bitmapLen=${bitmapLength}, DATS[5]=${t}…`);
     await mask.upload(payload, bitmapLength, { trailing: t });
@@ -601,6 +608,15 @@ function UploadLab() {
         step ACKed (DATSOK, REOK, DATCPOK). Recovery is a power cycle. Kept only for further probing.
       </p>`}
 
+      <label class="row">
+        <input type="checkbox" checked=${releaseOverride}
+          onChange=${(e) => setReleaseOverride(e.target.checked)} />
+        <span>Send <code>FC enable=0</code> first — release any color override</span>
+      </label>
+      <p class="note">
+        The official app always sends enable=0, and enable=1 is a hard override. If enable=0 means
+        "use the content's own colors", this is why an uploaded color rendered white before.
+      </p>
       <div class="row wrap">
         <${Btn} kind="primary" onClick=${() => send()}>Send once<//>
         <${Btn} onClick=${sweepTrailing}>Sweep DATS 5th byte 0→20<//>
