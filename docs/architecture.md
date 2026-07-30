@@ -103,10 +103,11 @@ Two things make the remaining friction near-zero anyway:
 
 ## Audio-reactive visualizer
 
-**The mask has no built-in visualizer to feed.** No audio, music, microphone, FFT or beat-detection
-reference exists in any of the four sources, and no such verb is documented. If the official app has
-a music mode, its command hasn't been reverse engineered — that would need a fresh BLE capture of the
-official app.
+**The official app has a sound visualizer; its protocol is being decoded.** An earlier draft here
+claimed no built-in visualizer existed — that was an over-reading of "no public source documents it".
+See [protocol.md](protocol.md#audio--visualizer-mode--under-investigation). Whether it runs on the
+mask or is streamed from the phone changes the design, so the host-side plan below is the fallback,
+not necessarily the answer.
 
 So the visualizer is host-side, and it's realistic within the transport budget above:
 

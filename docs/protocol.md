@@ -427,10 +427,21 @@ without the ability to repair it precisely.
 The mask accepts **one BLE central at a time**, so the phone and the Mac cannot both hold the link.
 Handoff has to be explicit in the UI rather than something you discover as a bug.
 
-## No built-in audio or visualizer mode
+## Audio / visualizer mode — under investigation
 
-Searched all three implementations for any audio, music, microphone, FFT, spectrum, or
-beat-detection reference: **nothing**. No such verb is documented, and no source suggests the mask
-has a microphone. If the official app has a music-reactive mode, its command has not been reverse
-engineered — you would have to sniff the official app's BLE traffic to find it. Build the visualizer
-host-side instead; see [`architecture.md`](architecture.md).
+**The official app HAS a sound visualizer.** An earlier version of this document said no such mode
+existed; that was wrong. What was actually true is narrower: *no public reverse-engineering source
+documents it.* Searching all four sources for audio, music, microphone, FFT, spectrum or
+beat-detection turns up nothing, but absence from those repos is not absence from the protocol — the
+DIY image path taught us that lesson already.
+
+Two possibilities, and they lead to very different designs:
+
+- **On-mask.** The mask has a microphone and runs the effect itself, so the app only selects a mode.
+  We would just send that one command.
+- **Host-driven.** The phone analyses the audio and streams values over BLE. Then the stream rate is
+  also the practical ceiling for our own visualizer, and we can replicate it from Web Audio.
+
+[`../tools/decode-viz.mjs`](../tools/decode-viz.mjs) distinguishes them from a capture: it segments a
+session on idle gaps, and reports per-argument-byte statistics so a constant mode byte, a stepping
+effect index and a continuously varying audio level are told apart.
