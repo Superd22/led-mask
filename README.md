@@ -1,104 +1,130 @@
 # led-mask
 
-Controlling a **Shining Mask** (BLE LED face mask) from the browser — a control app for the phone,
-and a MIDI relay from Ableton on the Mac.
+Controlling a **Shining Mask** (BLE LED face mask) from the browser.
 
 **Live: https://superd22.github.io/led-mask/** — a control surface and protocol test harness, working
-against real hardware. No build step: native ESM plus a vendored 13 KB Preact+htm, so the source
-deploys straight to GitHub Pages.
+against real hardware (`MASK-9C2F6A`). No build step: native ESM plus a vendored 13 KB Preact+htm, so
+the source deploys straight to GitHub Pages.
 
-## Verdict: a PWA is the right fit
+Along the way this became the most complete public description of the mask's protocol. Several things
+here appear in no other source — see [Discoveries](#discoveries-not-in-any-public-source).
 
-Chrome supports **both Web Bluetooth and Web MIDI** on desktop and Android, so one codebase covers
-both use cases:
+## Status
 
-| | Chrome desktop (macOS) | Chrome Android | Safari / iOS |
-|---|---|---|---|
-| Web Bluetooth | yes | yes | **no** |
-| Web MIDI | yes | yes | **no** |
+**Working, on hardware:**
 
-**Role A — mobile control (Android PWA).** Parity with the official app: browse/select built-in
-images, animations, brightness, speed, DIY playlists, custom uploads. Nothing needs a native API.
+- Discovery, connect, reconnect. Unbonded, no OS pairing.
+- Built-in images and animations (`IMAG` / `ANIM`), brightness, speed, scroll modes.
+- **Full-colour 46 × 58 DIY images** uploaded into persistent slots from a file or a generated
+  pattern, then recalled with `PLAY`.
+- Live text/bitmap upload into the 16-row text band, with per-column colour.
+- Colour via `FC` (~11 ms per change).
+- **The native sound visualizer** — mic or local audio file → FFT → 24 bands → the mask's own
+  renderer, 5 effects, up to 50 Hz.
+- Raw command console and a decrypted log of every byte in both directions.
+- Capture decoders for Bluetooth HCI snoop logs.
 
-**Role B — MIDI relay (macOS Chrome PWA).** Ableton → IAC Driver virtual bus →
-`requestMIDIAccess()` → map notes/CCs → Web Bluetooth. No native app, no CoreMIDI plumbing beyond
-enabling the IAC bus.
+**Not built yet:**
 
-**iOS is out.** WebKit implements neither API and iOS forces all browsers onto WebKit, so an
-installed PWA on iPhone cannot do either. Target is Android; not blocking.
+- **Role B — the MIDI relay.** Ableton → IAC bus → `requestMIDIAccess()` → mask. This was the
+  original goal and none of it exists yet; everything it needs is in place.
+- PWA polish: no service worker, so no offline use, and no screen wake lock.
+- Untethered operation — see the deferred options in [`docs/architecture.md`](docs/architecture.md).
 
-## Read next
+**Known-unresolved:** the pixel order of DIY images (row-major vs column-major) is a toggle in the UI
+because the two captured images differed everywhere and could not settle it. Use the *corner marker*
+test pattern to pin it down.
 
-- [`docs/architecture.md`](docs/architecture.md) — the decision note: roles, design rules,
-  connection UX, the visualizer plan, and the deferred untethered-MIDI options
-- [`docs/protocol.md`](docs/protocol.md) — the mask's BLE protocol, with a per-claim source and
-  confidence table
-- [`src/mask-protocol.js`](src/mask-protocol.js) — reference implementation of the command encoding,
-  the upload handshake, and the AES-ECB workarounds
-- [`src/mask-protocol.test.mjs`](src/mask-protocol.test.mjs) — verifies that encoding against real
-  AES and against decrypted captures of the official app (`node src/mask-protocol.test.mjs`)
-- [`src/mask-transport.js`](src/mask-transport.js) — Web Bluetooth layer: connect, the upload state
-  machine, and the coalescing writer for high-rate paths
-- [`src/app.js`](src/app.js) + [`index.html`](index.html) — the UI
+## Repo map
 
-## Nothing left to sniff
+| Path | What |
+|---|---|
+| [`docs/protocol.md`](docs/protocol.md) | **Start here.** The protocol, with a hardware-findings table that supersedes everything, plus per-claim sources and confidence. |
+| [`docs/architecture.md`](docs/architecture.md) | Platform decision, design rules, connection UX, visualizer plan, deferred untethered options. |
+| [`src/mask-protocol.js`](src/mask-protocol.js) | Pure encoding: commands, both upload modes, the visualizer stream, AES-ECB workarounds. Touches no browser API. |
+| [`src/mask-transport.js`](src/mask-transport.js) | Web Bluetooth: connect, characteristic discovery, the upload state machine, the coalescing/dropping writers. |
+| [`src/app.js`](src/app.js) + [`index.html`](index.html) | The UI. |
+| [`src/mask-protocol.test.mjs`](src/mask-protocol.test.mjs) | `node src/mask-protocol.test.mjs` — 46 assertions against real AES and against decrypted captures of the official app. |
+| [`tools/decode-capture.mjs`](tools/decode-capture.mjs) | Decode an HCI capture into a transcript; flags unknown verbs, dumps upload payloads. |
+| [`tools/decode-viz.mjs`](tools/decode-viz.mjs) | Session analyser for high-rate streams: segments on idle gaps, per-byte statistics, decodes the visualizer. |
+| [`tools/lib/btsnoop.mjs`](tools/lib/btsnoop.mjs) | Shared btsnoop/HCI/L2CAP/ATT parsing and frame decoding. |
 
-Both former unknowns are resolved. The primary service UUID is
-`0000fff0-0000-1000-8000-00805f9b34fb` (the standard 16-bit `0xfff0`) — confirmed independently by
-two working implementations, and absent from the Web Bluetooth blocklist, so Chrome will grant it:
+## Working on it
 
-```js
-const device = await navigator.bluetooth.requestDevice({
-  filters: [{ namePrefix: 'MASK', services: [0xfff0] }],
-  optionalServices: [0xfff0],
-});
+```bash
+python3 -m http.server 8765          # any static server; Web Bluetooth needs HTTPS or localhost
+node src/mask-protocol.test.mjs      # no deps, no framework
 ```
 
-The mask connects **unbonded** — no OS pairing step. Best achievable UX is two taps (Connect, then
-pick the mask); zero-tap auto-connect needs Chrome flags, so treat it as an enhancement rather than
-the path.
+Deploy is `git push` — GitHub Pages serves `main` at root. `.nojekyll` is required (Jekyll would eat
+`_`-prefixed paths). Use relative imports only; absolute paths break under the `/led-mask/` subpath.
 
-## The things most likely to trip you up
+**Web Bluetooth needs Chrome** on desktop or Android, over HTTPS. iOS cannot do this at all — WebKit
+implements neither Web Bluetooth nor Web MIDI, and iOS forces every browser onto WebKit.
 
-1. **WebCrypto has no AES-ECB.** Encryption: `AES-CBC` with a zero IV, keep the first 16 bytes.
-   Decryption — which you *do* need, because notifications are encrypted too — needs a per-block
-   crafted padding block. Both are implemented and tested in
-   [`src/mask-protocol.js`](src/mask-protocol.js).
-2. **You must declare the service UUID** in `requestDevice()`. Web Bluetooth blocks undeclared
-   services — unlike bleak, you cannot write to a characteristic and let the stack find the service.
-3. **Upload is a notification handshake, not a paced write loop.** `DATS` → `DATSOK` → (packet →
-   `REOK`)* → `DATCP` → `DATCPOK`. Don't use `writeValueWithoutResponse()` for the packets.
-4. **`DATS` has two modes, set by its 5th arg byte.** `0x00` = text: field 2 is `bitmapLen`, payload
-   is `[1-bit bitmap][one RGB per column]`, lands on the live display in a 16-row band. `0x01` =
-   image: field 2 is the **destination slot**, payload is **raw RGB 3 bytes/pixel**, and it writes a
-   **persistent** slot. Decoded from a capture of the official app.
-5. **The sound visualizer is host-driven and decoded.** The phone runs the FFT and streams
-   `[0x0f][effect][24 nibbles][00 00]` at ~10 Hz; the mask renders one of 5 built-in effects. The
-   opcode is **binary, not an ASCII verb**, which is why no public source ever found it — and it goes
-   to a **fourth characteristic, `…960b`**, that no public source records either. The app streams at
-   10 Hz; the mask happily accepts **50 Hz**.
-6. **The mask cannot be queried.** No verb lists what is on the device, so the app owns its inventory.
-7. **The panel is 46 × 58** — from the capture, where `DATS` declared 8004 = 46 × 58 × 3 bytes.
-8. **`FC`'s enable byte picks a colour source**: `1` = override with literal RGB, `0` = use the
-   content's own colours. Getting this wrong makes uploaded colour look broken.
+### Capturing the official app
+
+The remaining unknowns are best settled by watching the real app:
+
+1. Developer options → **Bluetooth HCI snoop log → Enabled** (*not* Filtered — Filtered strips ATT
+   payloads and the capture is useless). Reboot.
+2. Reproduce in the official app.
+3. `adb bugreport bug.zip` — **leave the snoop log on**; disabling it can rotate the log away.
+4. `node tools/decode-capture.mjs bug.zip` or `node tools/decode-viz.mjs bug.zip`.
+
+Since the AES key is known, everything decrypts. Bug reports contain device logs and identifiers and
+are gitignored — don't commit them.
+
+## Discoveries not in any public source
+
+- **The `…960b` characteristic.** A fourth characteristic in the `fff0` service, carrying the sound
+  visualizer stream. A capture gives ATT handles, never UUIDs; pairing the capture with a live
+  `getCharacteristics()` is what resolved handle `0x0b` to a UUID.
+- **`DATS` has two modes**, selected by its 5th arg byte, which every prior source sends as `0` and
+  none explains. `0x00` = text: field 2 is `bitmapLen`, payload is `[1-bit bitmap][one RGB per
+  column]`, lands on the live display. `0x01` = image: field 2 is the **destination slot**, payload is
+  **raw RGB 3 bytes/pixel**, and it writes a **persistent** slot.
+- **The visualizer protocol**: `[0x0f][effect][12 bytes = 24 packed nibbles][00 00]`. The opcode is
+  **binary, not an ASCII verb**, which is why verb-hunting never found it.
+- **The panel is 46 × 58**, and `DATS` text mode only reaches a 16-row band of it.
+- **`FC`'s enable byte selects a colour source**: `1` = override with literal RGB, `0` = use the
+  content's own colours. Get this wrong and uploaded colour looks broken.
+- **`CHEC` works** and returns 34.
+- The mask accepts visualizer frames at **50 Hz**, 5× what the official app sends.
+
+## Gotchas that cost real time
+
+1. **WebCrypto has no AES-ECB.** Encrypt with `AES-CBC` + zero IV, keep the first 16 bytes. Decrypt —
+   which you need, because notifications are encrypted too — requires a crafted per-block padding
+   block. Both are implemented and tested.
+2. **You must declare the service UUID** in `requestDevice()`. Unlike bleak, you cannot write to a
+   characteristic and let the stack find the service.
+3. **Upload is a notification handshake**, not a paced write loop: `DATS` → `DATSOK` → (packet →
+   `REOK`)\* → `DATCP` → `DATCPOK`. Don't use `writeValueWithoutResponse()` for the packets.
+4. **ACKs are not health.** `DATS` with `bitmapLen = 0` soft-locks the mask — every step still ACKs
+   while the display wedges. Recovery is a power cycle.
+5. **The mask cannot be queried**, so the app owns its inventory of what is in which slot.
+6. **`Object.entries()` on `BluetoothCharacteristicProperties` returns nothing** — the flags are
+   prototype getters. Read them by name.
+7. **`muted` on an `<audio>` element zeroes its `MediaElementAudioSourceNode`** — the analyser sees
+   silence. Use volume instead.
 
 ## Credits
 
-Protocol details come from public reverse-engineering work. Full source-by-source table with
+Protocol details build on public reverse-engineering work. Full source-by-source table with
 confidence levels in [`docs/protocol.md`](docs/protocol.md); the main ones:
 
-- [GoneUp/mask-go](https://github.com/GoneUp/mask-go) — working Go implementation. The most complete
-  source, and the only one that implements upload.
+- [GoneUp/mask-go](https://github.com/GoneUp/mask-go) — working Go implementation, the most complete
+  prior source and the only one implementing upload.
 - [shawnrancatore/shining-mask](https://github.com/shawnrancatore/shining-mask) — working
-  CircuitPython implementation. Independently confirms the UUIDs and key, and is the source of the
-  24 Hz measurement.
+  CircuitPython implementation; independently confirms the UUIDs and key.
 - [beclamide/mask-controller](https://github.com/beclamide/mask-controller) — has no AES key and only
-  replays opaque hex, so its blobs are **captures of the official app**. Decrypting them is the most
-  authoritative wire-format evidence available, and it settled two disagreements against mask-go.
+  replays opaque hex, so its blobs are **captures of the official app**. Decrypting them settled two
+  disagreements against mask-go.
 - [the r/ReverseEngineering thread](https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/help_me_figure_out_how_to_reverse_engineer_the/)
   ([key comment](https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/comment/h14nm39/)) —
   upstream origin of the AES key and protocol.
 - [gist by Staars](https://gist.github.com/Staars/71e63e4bdefc7e3fd22377bf9c50ac12) — the notes this
-  repo originally started from.
+  repo started from.
 
 Nothing here is official or endorsed by the mask's manufacturer.

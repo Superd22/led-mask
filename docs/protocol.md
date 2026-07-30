@@ -356,29 +356,24 @@ So single-block command writes are good for **at least ~24 Hz**, which is comfor
 
 ## DIY slot limits
 
-### Confirmed on hardware: uploads do not write DIY slots
+### Superseded: "uploads do not write DIY slots"
 
-**Settled.** 20 successful uploads followed by `PLAY 1…3` still showed the pre-existing official-app
-DIY images. `PLAY n` selects a slot; nothing we can send writes one. The source evidence below all
-pointed this way and is now confirmed.
+⚠️ **This conclusion was WRONG**, and is kept only because the reasoning trail is instructive.
 
-- **`PLAY n` selects slot `n`. Nothing in any of the four sources writes slot `n`.** There is no
-  slot-addressing verb, and critically **`DATS` takes no slot parameter** — it declares a total
-  length and a bitmap length, and that's all.
-- **[go]** never sends `PLAY` after an upload. Its `SetText` runs `DATS`/packets/`DATCP` and the text
-  just appears; on `DATCPOK` it only clears its `uploadRunning` flag.
-- **[js]**'s captured `changeFace` sequence is the same shape — upload packets, then `DATCP`, then
-  `MODE`. No `PLAY`, no slot index anywhere.
-- **[cp]**'s README says it outright: *"Make sure that you load some custom images to the mask before
-  trying this."* It only ever switches between slots the official app populated.
+For a while this document stated, as a confirmed hardware finding, that uploads could never write a
+DIY slot. The evidence looked strong: 20 successful uploads followed by `PLAY 1…3` showed only the
+pre-existing images; **[go]** never sends `PLAY` after an upload; **[js]**'s captured `changeFace` has
+no slot index; and **[cp]**'s README says to load images with the official app first.
 
-So the upload path is the **live display** channel — the text/scrolling-bitmap path, which fits with
-`MODE`, `SPEED`, `M`, `FC` and `BC` all being text-oriented.
+Every one of those observations was true. The conclusion drawn from them was not. They all describe
+`DATS` **text mode** — and nobody had exercised mode `0x01`, where field 2 stops being `bitmapLen` and
+becomes the destination slot. See
+[SOLVED: the DIY image path](#solved-the-diy-image-path).
 
-**Consequence for a frame-bank design:** the bank must be authored **by hand in the official app**,
-after which your own code can switch indices freely. "The PWA uploads its own frame bank" is not
-possible with the protocol as understood. That is still fine for a performance rig — author once,
-`PLAY` at 24 Hz — it just isn't self-service.
+The lesson worth carrying: *"no source does X"* is evidence about the sources, not about the device.
+The same mistake was made twice more here — with the "raw RGB, 3 bytes per pixel" note that turned out
+to describe image mode, and with the sound visualizer, which was declared nonexistent because no repo
+mentioned audio.
 
 ### Numeric bounds
 

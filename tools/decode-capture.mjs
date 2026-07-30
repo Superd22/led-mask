@@ -119,9 +119,8 @@ if (uploads.length) {
     fs.writeFileSync(file, u.payload);
     const n = u.payload.length;
     const geom = [
-      [46, 48, 3, 'per-pixel RGB @46x48'],
-      [46, 16, 3, 'per-pixel RGB @46x16'],
-      [46, 1, 5, 'bitmap+per-column @46'],
+      [46, 58, 3, 'DIY image: per-pixel RGB @46x58'],
+      [46, 1, 5, 'text mode: bitmap + per-column colour @46'],
     ]
       .filter(([w, h, bpp]) => n === w * h * bpp)
       .map(([, , , label]) => label);

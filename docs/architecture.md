@@ -46,10 +46,11 @@ Both roles are one app; the Mac tab can also do Role A.
 5. **Keep the command encoding transport-agnostic.** Put protocol encoding in a module that doesn't
    know whether it's talking to Web Bluetooth or a WebSocket — that's what makes the untethered
    options below a transport swap rather than a rewrite.
-6. **The mask cannot be queried, and we cannot author its slots.** Nothing lists what's on the device
-   (see [protocol.md](protocol.md#no-way-to-enumerate-whats-on-the-device)) and uploads don't write
-   slots, so the DIY bank is authored in the official app and our side keeps only a local *label* for
-   each index. Treat that mapping as a user-editable guess, not a fact, and never build UI implying
+6. **The mask cannot be queried.** Nothing lists what is on the device — `CHEC` returns a bare count
+   (34) and nothing else, see
+   [protocol.md](protocol.md#no-way-to-enumerate-whats-on-the-device). We *can* author slots
+   (`DATS` mode `0x01`), so the app knows what it wrote — but that record desynchronises the moment
+   the official app touches the mask. Keep it as a user-editable label, and never build UI implying
    the mask was asked.
 
 ## Connection UX: how hands-off can it get?
@@ -101,36 +102,41 @@ Two things make the remaining friction near-zero anyway:
 - Web MIDI prompts for permission; only request sysex if actually needed.
 - Android also needs the OS-level nearby-devices/location permission before scanning works.
 
-## Audio-reactive visualizer
+## Audio-reactive visualizer — solved, and better than planned
 
-**Solved: the mask has a native visualizer API, and it is host-driven.** The phone runs the FFT and
-streams 24 band levels at ~10 Hz; the mask renders one of 5 built-in effects. See
-[protocol.md](protocol.md#sound-visualizer--solved).
+**The mask has a native visualizer API, and it is host-driven.** The phone runs the FFT and streams
+24 band levels; the mask renders one of 5 built-in effects. Full format in
+[protocol.md](protocol.md#sound-visualizer-solved). Implemented in the app's *Sound visualizer*
+panel, driven from `getUserMedia` or a local audio file.
 
-That is better than the host-side plan below, because the mask does the rendering: we send 16 bytes
-per frame instead of driving shape and colour ourselves. The plan below is still how you would build
-a *custom* visualizer that does not look like the official app's.
+This supersedes the original plan of driving shape and colour ourselves: we send **16 bytes per
+frame** and the mask does the rendering, so it looks exactly like the official app for a fraction of
+the effort. The official app streams at 10 Hz; **50 Hz works** on hardware.
 
-So the visualizer is host-side, and it's realistic within the transport budget above:
+Practical notes that took real debugging to find:
 
-- **Author the frame bank in the official app**, then drive `PLAY` index switches from audio features
-  at 12–24 Hz. Confirmed on hardware: uploads write the *live display*, not a slot, so the PWA cannot
-  populate the bank itself — see
-  [protocol.md](protocol.md#confirmed-on-hardware-uploads-do-not-write-diy-slots). `PLAY` is ~11 ms,
-  so index switching is comfortably fast.
-- **`FC` with `enable = 1` is the colour axis — confirmed on hardware**, one encrypted 16-byte write
-  at ~11 ms, same cost as `PLAY`. So shape and colour are orthogonal and both run at 24 Hz: shape from
-  the DIY bank, hue/brightness from the spectrum. This is the whole visualizer architecture.
-- **Don't stream novel bitmaps.** That's the `DATS`/`REOK`/`DATCP` handshake — a few frames per
-  second at best, and it consumes a DIY slot.
-- **Where the audio comes from differs per role.** Role A (phone): `getUserMedia` mic →
-  `AnalyserNode`. Role B (Ableton): prefer having Ableton do the analysis and send MIDI CC, which is
-  both cheaper and sample-synced to the DAW; capturing system audio into Chrome via a loopback
-  device is the fallback.
-- **Colour comes from `FC`, not from the uploaded payload.** An uploaded per-column RGB is ignored on
-  hardware (red rendered white). `FC` is a single 16-byte command at ~11 ms, which makes it a genuine
-  second axis: shape from the frame bank, colour from the spectrum, both at 24 Hz.
-- **The display is 46 columns × 16 rows** on the unit tested — measured, not documented anywhere.
+- It goes to the **`…960b` characteristic**, not the command characteristic. Sending these frames to
+  `…9600` does nothing at all.
+- **Drop frames, don't queue them.** Chrome serialises GATT operations, so an awaited write per frame
+  backs up and the mask drifts behind the audio. `sendSpectrum` skips a frame if the previous write
+  is still in flight.
+- **FFT resolution matters.** At `fftSize` 1024 the bins are 43 Hz wide and the lowest log-spaced
+  bands resolve to the *same bin*, so they cannot differ. Use 8192.
+- **Apply spectral tilt** (~4.5 dB/octave). Without it the bass bands pin at maximum and the treble
+  never moves, which reads as "all the bars look the same".
+
+### If you want a visualizer the official app can't do
+
+Everything needed is confirmed and orthogonal — build your own frames rather than using the built-in
+effects:
+
+- **Shape:** author full-colour 46 × 58 images into DIY slots with `DATS` mode `0x01`, then switch
+  them with `PLAY` at ~11 ms per switch.
+- **Colour:** `FC` with `enable = 1` overrides content colour, also ~11 ms.
+- **Don't stream novel bitmaps per frame.** An upload is ~300 ms — fine for setup, never per frame.
+- **Audio source differs per role.** Role A (phone): `getUserMedia` → `AnalyserNode`. Role B
+  (Ableton): prefer letting Ableton do the analysis and send MIDI CC — cheaper and sample-synced to
+  the DAW. Capturing system audio into Chrome via a loopback device is the fallback.
 
 ## Deferred: untethered MIDI (no Mac present)
 

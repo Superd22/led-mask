@@ -363,16 +363,12 @@ function Upload() {
 /**
  * Colour control.
  *
- * Hardware findings, 2026-07-30, that shape this panel:
- *  - Upload writes the LIVE display buffer, not a PLAY-addressable DIY slot. 20 uploads followed by
- *    PLAY 1..3 still showed the pre-existing official-app DIY images.
- *  - An uploaded bitmap renders, but its per-column RGB is IGNORED — a red fill came out white.
- *    Consistent with the fact that no known implementation ever uploaded a non-white colour array:
- *    mask-go hardcodes 0xFFFFFF, and the official-app capture is 0xFFFFFC.
- *  - So colour most likely comes from FC/BC, gated by their `enable` byte.
+ * FC with enable=1 overrides content colour with literal RGB at ~11ms per change — 30x cheaper than
+ * re-uploading. So the useful pattern is: prime a shape once (slow), then recolour instantly.
  *
- * Which gives a much better architecture than per-pick upload: prime the shape once (slow), then
- * recolour with a single 16-byte command (fast enough for the visualizer).
+ * enable=0 hands colour back to the content instead, which is what the official app sends. An
+ * uploaded image's own colours stay invisible until that override is released — mistaking that for
+ * "the payload's colour is ignored" cost an afternoon and a wrong entry in the docs.
  */
 function ColorBank() {
   const [count, setCount] = useState(20);
@@ -421,9 +417,8 @@ function ColorBank() {
 
   return html`
     <${Section} title="Color"
-      note=${`Upload writes the live display, not a DIY slot — confirmed on hardware. And an uploaded
-              per-column RGB is ignored, so colour has to come from FC. Prime the shape once, then
-              recolour with one command.`}>
+      note=${`FC enable=1 overrides colour with literal RGB (~11ms); enable=0 hands colour back to the
+              content. Prime a shape once, then recolour with one command.`}>
       <div class="row wrap">
         <label class="row"><span class="lbl">Colors</span>
           <input type="number" min="1" max="64" value=${count}
@@ -974,10 +969,10 @@ function UploadLab() {
   const { payload, bitmapLength } = build();
 
   return html`
-    <${Section} title="Upload lab — full color & slot writing"
-      note=${`Probes whether per-pixel color and DIY-slot writing are reachable. The pattern below
-              varies hue horizontally AND brightness vertically; the vertical part is decisive, since
-              per-column color cannot produce it.`}>
+    <${Section} title="Upload lab — raw DATS experiments"
+      note=${`For poking at DATS headers by hand. The supported paths are the DIY image panel (mode
+              0x01, full color, persistent) and the text upload below (mode 0x00, 16-row band).
+              The pattern varies hue horizontally and brightness vertically.`}>
       <canvas ref=${canvasRef} class="preview"></canvas>
 
       <div class="row wrap">

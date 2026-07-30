@@ -13,11 +13,10 @@
  *
  * Ultimately derived from https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/
  *
- * VERIFIED on real hardware (MASK-9C2F6A, 2026-07-30): connect, IMAG, ANIM, PLAY, MODE, LIGHT, the
- * full DATS/REOK/DATCP upload handshake, and FC all work with bytes produced by this file. Two
- * behaviours differ from what the sources implied — uploads write the live display rather than a DIY
- * slot, and the uploaded per-column RGB is ignored. See the hardware-findings table at the top of
- * ../docs/protocol.md. Remaining ambiguities are marked ⚠️ below.
+ * VERIFIED on real hardware (MASK-9C2F6A, 2026-07-30): connect, IMAG, ANIM, PLAY, MODE, LIGHT, both
+ * DATS upload modes, FC, CHEC and the sound-visualizer stream all work with bytes produced by this
+ * file. See the hardware-findings table at the top of ../docs/protocol.md, which supersedes anything
+ * inferred from the sources above. Remaining ambiguities are marked ⚠️ below.
  *
  * Deliberately transport-agnostic: nothing here touches Web Bluetooth. Feed the returned frames to
  * a GATT characteristic, a WebSocket, or a test harness. That separation is what makes the

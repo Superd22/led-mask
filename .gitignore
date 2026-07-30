@@ -1,11 +1,17 @@
 node_modules/
 dist/
 .DS_Store
-*.log
 .env
 .env.local
-capture-out/
-bug*.zip
-*btsnoop*
-bug/
-bugreport*/
+
+# Bluetooth captures, and anything decoded out of them. Bug reports contain device logs and
+# identifiers — never commit them.
+#
+# Patterns are anchored to the repo root so they cannot swallow source: an earlier unanchored
+# `*btsnoop*` silently untracked tools/lib/btsnoop.mjs, which both decoders import.
+/bug*.zip
+/bug/
+/bugreport*/
+/capture-out/
+/*.log
+/**/btsnoop_hci*.log
