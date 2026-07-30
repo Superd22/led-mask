@@ -83,6 +83,22 @@
         image-rendering: pixelated; border: 1px solid var(--line);
         border-radius: 6px; background: #111; max-width: 100%; overflow-x: auto;
       }
+      .sub { margin: 0; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+      .swatches {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 0.3rem;
+      }
+      .swatch {
+        aspect-ratio: 1; border-radius: 6px; border: 1px solid #00000060;
+        display: grid; place-items: center; padding: 0; font: inherit;
+      }
+      .swatch span {
+        font-size: 0.7rem; font-weight: 700; color: #000;
+        background: #ffffffb0; border-radius: 3px; padding: 0 0.25rem;
+      }
+      .swatches.pickable .swatch { cursor: pointer; }
+      .swatches.pickable .swatch:hover { outline: 2px solid var(--fg); }
+      .swatch.active { outline: 3px solid var(--accent); }
+      code { background: #0d0d12; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; }
       .status { margin: 0; font-size: 0.88rem; color: var(--muted); }
       .status.connected b { color: var(--ok); }
       .status.connecting b { color: var(--warn); }

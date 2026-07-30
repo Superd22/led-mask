@@ -66,6 +66,43 @@ const hexToRgb = (hex) => [
   parseInt(hex.slice(5, 7), 16),
 ];
 
+const rgbToHex = ([r, g, b]) =>
+  `#${[r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
+
+/** Evenly spaced hues at full saturation. h in [0,360). */
+function hslToRgb(h, s = 1, l = 0.5) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (h % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const [r, g, b] =
+    hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x]
+    : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
+  const m = l - c / 2;
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+/**
+ * A solid fill: every pixel in every column lit, one RGB per column.
+ *
+ * `columns` is a guess at the display width — no source states it, and text is variable-width and
+ * scrolls. Uploading a solid fill at different widths is itself the cheapest way to find the real
+ * number: too narrow and it won't cover the face, too wide and it should scroll.
+ */
+function solidColorPayload(rgb, columns) {
+  const cols = Array.from({ length: columns }, () => Array(DISPLAY_HEIGHT).fill(1));
+  return buildUploadPayload(encodeBitmap(cols), encodeColors(cols.map(() => rgb)));
+}
+
+const BANK_KEY = 'led-mask.colorBank';
+const loadBank = () => {
+  try {
+    return JSON.parse(localStorage.getItem(BANK_KEY)) || null;
+  } catch {
+    return null;
+  }
+};
+const saveBank = (bank) => localStorage.setItem(BANK_KEY, JSON.stringify(bank));
+
 // ---------------------------------------------------------------- primitives
 
 const Section = ({ title, note, children }) => html`
@@ -322,6 +359,130 @@ function Upload() {
   `;
 }
 
+/**
+ * Preload a bank of solid colours into DIY slots, then switch between them with one PLAY command.
+ *
+ * This is the frame-bank architecture in miniature, and the pattern the visualizer will reuse: pay
+ * the slow upload cost once, then switch indices at ~24 Hz. It also implements design rule 6 — the
+ * mask cannot be queried, so the slot→colour mapping is persisted here and treated as authoritative.
+ */
+function ColorBank() {
+  const saved = loadBank();
+  const [count, setCount] = useState(saved?.slots?.length ?? 20);
+  const [width, setWidth] = useState(saved?.width ?? 32);
+  const [firstSlot, setFirstSlot] = useState(saved?.firstSlot ?? 1);
+  const [selectFirst, setSelectFirst] = useState(saved?.selectFirst ?? true);
+  const [bank, setBank] = useState(saved?.slots ?? null);
+  const [progress, setProgress] = useState('');
+  const [active, setActive] = useState(null);
+  const cancelRef = useRef(false);
+
+  const palette = Array.from({ length: count }, (_, i) => ({
+    slot: firstSlot + i,
+    hex: rgbToHex(hslToRgb((i * 360) / count)),
+  }));
+
+  const uploadAll = async () => {
+    cancelRef.current = false;
+    // Solid fills only make sense static; scrolling would just slide a flat colour around.
+    await mask.sendCommand(command.mode(MODE.steady), 'MODE steady');
+
+    const written = [];
+    for (const [i, entry] of palette.entries()) {
+      if (cancelRef.current) {
+        setProgress(`cancelled after ${i} of ${palette.length}`);
+        break;
+      }
+      setProgress(`slot ${entry.slot} (${i + 1}/${palette.length}) — ${entry.hex}`);
+
+      // If the mask writes into the *currently selected* slot, this is what targets it.
+      if (selectFirst) {
+        await mask.sendCommand(command.play(entry.slot), `PLAY ${entry.slot} (target)`);
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      const { payload, bitmapLength } = solidColorPayload(hexToRgb(entry.hex), width);
+      await mask.upload(payload, bitmapLength);
+      written.push(entry);
+      setBank([...written]);
+      saveBank({ slots: written, width, firstSlot, selectFirst, at: Date.now() });
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (!cancelRef.current) setProgress(`done — ${written.length} slots written`);
+  };
+
+  const pick = async (entry) => {
+    setActive(entry.slot);
+    await mask.sendCommand(command.play(entry.slot), `PLAY ${entry.slot} → ${entry.hex}`);
+  };
+
+  return html`
+    <${Section} title="Color bank"
+      note=${`Uploads solid colours into DIY slots, then switches with one PLAY command. Upload is slow
+              (~6 round trips each); switching afterwards is not. The slot mapping lives in
+              localStorage because the mask cannot be asked what it holds.`}>
+      <div class="row wrap">
+        <label class="row"><span class="lbl">Colors</span>
+          <input type="number" min="1" max=${21} value=${count}
+            onInput=${(e) => setCount(Math.max(1, +e.target.value))} /></label>
+        <label class="row"><span class="lbl">First slot</span>
+          <input type="number" min="0" max="255" value=${firstSlot}
+            onInput=${(e) => setFirstSlot(+e.target.value)} /></label>
+        <label class="row"><span class="lbl">Width (columns)</span>
+          <input type="number" min="1" max="255" value=${width}
+            onInput=${(e) => setWidth(Math.max(1, +e.target.value))} /></label>
+      </div>
+
+      <div class="swatches">
+        ${palette.map((entry) => html`
+          <div class="swatch" style=${`background:${entry.hex}`} title=${`slot ${entry.slot} ${entry.hex}`}>
+            <span>${entry.slot}</span>
+          </div>
+        `)}
+      </div>
+      <p class="note">
+        ${width} columns → ${width * 5} bytes per image, ${Math.ceil((width * 5) / 98)} packet(s) each.
+      </p>
+
+      <label class="row">
+        <input type="checkbox" checked=${selectFirst}
+          onChange=${(e) => setSelectFirst(e.target.checked)} />
+        <span>Send <code>PLAY n</code> before each upload to target the slot</span>
+      </label>
+      <p class="note">
+        DATS carries no slot index, so nobody knows how the mask chooses a destination. With this on we
+        select the slot first, which is the most plausible mechanism. If all 20 colours land in one
+        slot, turn it off and see whether uploads append instead.
+      </p>
+
+      <div class="row wrap">
+        <${Btn} kind="primary" onClick=${uploadAll}>Upload ${count} colors to slots<//>
+        <${Btn} onClick=${() => { cancelRef.current = true; }}>Cancel<//>
+        <${Btn} onClick=${() => { setBank(null); localStorage.removeItem(BANK_KEY); setProgress(''); }}>
+          Forget mapping
+        <//>
+      </div>
+      ${progress && html`<p class="status">${progress}</p>`}
+
+      ${bank?.length ? html`
+        <hr />
+        <h3 class="sub">Picker — ${bank.length} slot${bank.length > 1 ? 's' : ''} known</h3>
+        <div class="swatches pickable">
+          ${bank.map((entry) => html`
+            <button class=${`swatch ${active === entry.slot ? 'active' : ''}`}
+              style=${`background:${entry.hex}`} title=${`slot ${entry.slot} ${entry.hex}`}
+              onClick=${() => pick(entry)}><span>${entry.slot}</span></button>
+          `)}
+        </div>
+        <p class="note">
+          One PLAY command per pick. Survives reload; it will NOT survive the official app overwriting
+          a slot — re-upload if the colours stop matching.
+        </p>
+      ` : null}
+    <//>
+  `;
+}
+
 function Experiments() {
   const [result, setResult] = useState('');
   const sweep = async () => {
@@ -445,6 +606,7 @@ function App() {
     <div class=${live ? '' : 'dimmed'}>
       <${BuiltIn} />
       <${DiySlots} />
+      <${ColorBank} />
       <${Appearance} />
       <${Upload} />
       <${Experiments} />
