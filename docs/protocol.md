@@ -17,6 +17,7 @@ below.** Where a claim here contradicts a source, this wins.
 | **`PLAY` switching works** | Returns `PLAYOK` every time. DIY slots are real and persistent — but authored by the official app, not by us. |
 | **Upload costs ~300–350 ms** | Measured over 20 sequential uploads at 46 columns (3 packets each). |
 | **A command round trip is ~11 ms** | Single 16-byte write, e.g. `FC`. Comfortably 24 Hz. |
+| **`DATS` with `bitmapLen = 0` soft-locks the mask** | Upload animation freezes; power cycle required. Every step still ACKed, so **ACKs do not mean the mask is healthy**. |
 
 The practical consequence: **shape and colour are separate, and both are cheap.**
 
@@ -167,8 +168,10 @@ Candidate mechanisms, cheapest first:
 
 1. **`DATS`'s 5th arg byte.** Unexplained in every source; all send `0`. Prime suspect for selecting a
    destination slot or a payload format. Sweepable — the Upload lab in the app does this.
-2. **`bitmapLen = 0`.** If there is no bitmap section, the mask may treat the whole payload as raw
-   pixel data.
+2. ~~**`bitmapLen = 0`**, on the theory that the whole payload is then read as raw pixels.~~
+   **Tested — it SOFT-LOCKS the mask.** The upload animation freezes mid-way and only a power cycle
+   recovers it. Notably every step still ACKed (`DATSOK`, 5× `REOK`, `DATCPOK`), so **notification
+   ACKs are not a health signal** — the firmware will confirm a transfer that is wedging it.
 3. **Pixel order**, if a full-color format exists: column-major or row-major is unknown.
 4. **`DELE` and `CHEC`** exist in **[rd]** and nowhere else — "delete uploaded images" and "query how
    many images are uploaded". Both only make sense if a *writable* slot bank exists, which is further

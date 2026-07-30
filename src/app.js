@@ -493,7 +493,7 @@ function UploadLab() {
   const [trailing, setTrailing] = useState(0);
   const [format, setFormat] = useState('fullcolor');
   const [columnMajor, setColumnMajor] = useState(true);
-  const [bitmapLenMode, setBitmapLenMode] = useState('zero');
+  const [bitmapLenMode, setBitmapLenMode] = useState('full');
   const [result, setResult] = useState('');
   const canvasRef = useRef(null);
 
@@ -586,7 +586,7 @@ function UploadLab() {
         <div class="row wrap">
           <span class="lbl">DATS bitmapLen</span>
           <button class=${bitmapLenMode === 'zero' ? 'primary' : ''}
-            onClick=${() => setBitmapLenMode('zero')}>0 (no bitmap section)</button>
+            onClick=${() => setBitmapLenMode('zero')}>⚠️ 0 — SOFT-LOCKS the mask</button>
           <button class=${bitmapLenMode === 'full' ? 'primary' : ''}
             onClick=${() => setBitmapLenMode('full')}>= total</button>
         </div>
@@ -596,6 +596,10 @@ function UploadLab() {
         Payload ${payload.length} bytes, bitmapLen ${bitmapLength},
         ${Math.ceil(payload.length / 98)} packets. Ceiling is 25,088 bytes.
       </p>
+      ${bitmapLenMode === 'zero' && format === 'fullcolor' && html`<p class="warn">
+        ⚠️ bitmapLen = 0 soft-locked a real mask: the upload froze mid-animation even though every
+        step ACKed (DATSOK, REOK, DATCPOK). Recovery is a power cycle. Kept only for further probing.
+      </p>`}
 
       <div class="row wrap">
         <${Btn} kind="primary" onClick=${() => send()}>Send once<//>
