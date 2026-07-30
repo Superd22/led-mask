@@ -13,9 +13,11 @@
  *
  * Ultimately derived from https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/
  *
- * STILL UNTESTED against real hardware from *this* code. The byte layouts are taken from code that
- * demonstrably works, and the AES path is verified against a known-answer vector, but nobody has
- * confirmed a mask accepts bytes produced by this file. Three known ambiguities are marked ⚠️ below.
+ * VERIFIED on real hardware (MASK-9C2F6A, 2026-07-30): connect, IMAG, ANIM, PLAY, MODE, LIGHT, the
+ * full DATS/REOK/DATCP upload handshake, and FC all work with bytes produced by this file. Two
+ * behaviours differ from what the sources implied — uploads write the live display rather than a DIY
+ * slot, and the uploaded per-column RGB is ignored. See the hardware-findings table at the top of
+ * ../docs/protocol.md. Remaining ambiguities are marked ⚠️ below.
  *
  * Deliberately transport-agnostic: nothing here touches Web Bluetooth. Feed the returned frames to
  * a GATT characteristic, a WebSocket, or a test harness. That separation is what makes the
