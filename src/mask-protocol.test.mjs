@@ -17,6 +17,7 @@ import {
   encryptEcb, decryptEcb, parseNotification, buildCommandFrame, command,
   encodeBitmap, encodeColors, buildUploadPackets,
   MAX_INDICES_PER_COMMAND, MAX_UPLOAD_BYTES,
+  buildImagePayload, DIY_WIDTH, DIY_HEIGHT, DIY_IMAGE_BYTES,
 } from './mask-protocol.js';
 
 const KEY = Buffer.from('32672f7974ad43451d9c6c894a0e8764', 'hex');
@@ -195,6 +196,24 @@ throws('buildUploadPackets rejects a payload that would wrap the sequence byte',
   () => buildUploadPackets(new Uint8Array(MAX_UPLOAD_BYTES + 1)));
 check('sequence numbers never wrap at the ceiling',
   String(buildUploadPackets(new Uint8Array(MAX_UPLOAD_BYTES)).at(-1)[1]), '255');
+
+// --- DIY image payload: column-major, confirmed on hardware -------------------------------------
+// A gradient in x only would look identical either way, so the probe varies BOTH axes and reads the
+// first few pixels: column-major means pixel 1 is (0,1), row-major means it is (1,0).
+const probe = (x, y) => [x, y, 0];
+check('image payload is column-major: second pixel steps in y',
+  hex(buildImagePayload(probe, { width: 4, height: 3 }).subarray(0, 9)),
+  '000000000100000200');
+check('row-major stays available and steps in x',
+  hex(buildImagePayload(probe, { width: 4, height: 3, columnMajor: false }).subarray(0, 9)),
+  '000000010000020000');
+check('image payload defaults to the 46x58 panel',
+  String(buildImagePayload(() => [0, 0, 0]).length), String(DIY_IMAGE_BYTES));
+check('image payload honours a different panel size',
+  String(buildImagePayload(() => [0, 0, 0], { width: 32, height: 32 }).length), String(32 * 32 * 3));
+check('every panel pixel is written exactly once',
+  String(buildImagePayload((x, y) => [1, 1, 1], { width: DIY_WIDTH, height: DIY_HEIGHT })
+    .every((b) => b === 1)), 'true');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

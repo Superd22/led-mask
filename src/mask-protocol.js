@@ -495,7 +495,7 @@ export function encodeColors(colors) {
  * Both are probably real, describing different upload paths — the official app's DIY images are
  * full color, which the per-column format cannot express.
  *
- * `colorAt(x, y)` returns [r, g, b]. Pixel order is unknown, hence `columnMajor`.
+ * `colorAt(x, y)` returns [r, g, b], written column-major like the real image path.
  */
 export function buildFullColorPayload(width, colorAt, columnMajor = true) {
   const out = new Uint8Array(width * DISPLAY_HEIGHT * 3);
@@ -557,22 +557,27 @@ export function buildUploadPackets(payload) {
 /**
  * Build a full-face DIY image: raw RGB, 3 bytes per pixel, no bitmap section.
  *
- * `colorAt(x, y)` returns [r, g, b] with x in [0, DIY_WIDTH) and y in [0, DIY_HEIGHT).
- * Pixel order is not yet confirmed from the capture (both images differ throughout, so there was no
- * single-pixel diff to read it from) — hence `rowMajor`, which is trivial to settle on hardware.
+ * `colorAt(x, y)` returns [r, g, b] with x in [0, width) and y in [0, height).
+ *
+ * Pixel order is **column-major** — confirmed on hardware. Panels of a different size exist across
+ * vendor models, so the dimensions are parameters rather than baked in; DIY_WIDTH x DIY_HEIGHT is
+ * what our mask reports and what the official app's captures used.
  */
-export function buildImagePayload(colorAt, { rowMajor = true } = {}) {
-  const out = new Uint8Array(DIY_IMAGE_BYTES);
+export function buildImagePayload(
+  colorAt,
+  { columnMajor = true, width = DIY_WIDTH, height = DIY_HEIGHT } = {},
+) {
+  const out = new Uint8Array(width * height * 3);
   let i = 0;
-  if (rowMajor) {
-    for (let y = 0; y < DIY_HEIGHT; y++)
-      for (let x = 0; x < DIY_WIDTH; x++) {
+  if (columnMajor) {
+    for (let x = 0; x < width; x++)
+      for (let y = 0; y < height; y++) {
         const [r, g, b] = colorAt(x, y);
         out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
       }
   } else {
-    for (let x = 0; x < DIY_WIDTH; x++)
-      for (let y = 0; y < DIY_HEIGHT; y++) {
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
         const [r, g, b] = colorAt(x, y);
         out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
       }

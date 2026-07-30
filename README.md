@@ -2,9 +2,12 @@
 
 Controlling a **Shining Mask** (BLE LED face mask) from the browser.
 
-**Live: https://superd22.github.io/led-mask/** — a control surface and protocol test harness, working
-against real hardware (`MASK-9C2F6A`). No build step: native ESM plus a vendored 13 KB Preact+htm, so
-the source deploys straight to GitHub Pages.
+**Live: https://superd22.github.io/led-mask/** — a control surface working against real hardware
+(`MASK-9C2F6A`). No build step: native ESM plus a vendored 13 KB Preact+htm, so the source deploys
+straight to GitHub Pages.
+
+Four panels — **Prebuilt**, **Sound**, **Text**, **DIY** — plus the original reverse-engineering
+harness behind the **Dev** button, which still exposes every verb and every open question.
 
 Along the way this became the most complete public description of the mask's protocol. Several things
 here appear in no other source — see [Discoveries](#discoveries-not-in-any-public-source).
@@ -31,9 +34,8 @@ here appear in no other source — see [Discoveries](#discoveries-not-in-any-pub
 - PWA polish: no service worker, so no offline use, and no screen wake lock.
 - Untethered operation — see the deferred options in [`docs/architecture.md`](docs/architecture.md).
 
-**Known-unresolved:** the pixel order of DIY images (row-major vs column-major) is a toggle in the UI
-because the two captured images differed everywhere and could not settle it. Use the *corner marker*
-test pattern to pin it down.
+Panel geometry (46 x 58) and pixel order (column-major) are **device settings**, not constants —
+nothing in the protocol reports them and vendor models differ. Both live behind the status pill.
 
 ## Repo map
 
@@ -43,7 +45,15 @@ test pattern to pin it down.
 | [`docs/architecture.md`](docs/architecture.md) | Platform decision, design rules, connection UX, visualizer plan, deferred untethered options. |
 | [`src/mask-protocol.js`](src/mask-protocol.js) | Pure encoding: commands, both upload modes, the visualizer stream, AES-ECB workarounds. Touches no browser API. |
 | [`src/mask-transport.js`](src/mask-transport.js) | Web Bluetooth: connect, characteristic discovery, the upload state machine, the coalescing/dropping writers. |
-| [`src/app.js`](src/app.js) + [`index.html`](index.html) | The UI. |
+| [`src/app.js`](src/app.js) | Shell: connect bar, tabs, global brightness, dev toggle, log drawer. |
+| [`src/panels/`](src/panels/) | The four panels. One file each, no shared state between them. |
+| [`src/audio-engine.js`](src/audio-engine.js) | FFT → 24 bands: log spacing, dB window, spectral tilt, attack/decay. Shared by both UIs. |
+| [`src/image.js`](src/image.js) + [`src/led-preview.js`](src/led-preview.js) | Crop transforms, rasterising to panel pixels, and the LED-matrix renderer. |
+| [`src/store.js`](src/store.js) | localStorage stores: gallery, slot inventory, panel geometry. The mask can't be queried, so this is the only record of what's in a slot. |
+| [`src/device-menu.js`](src/device-menu.js) | The status pill: connect/disconnect plus panel size and pixel order. |
+| [`src/ui-kit.js`](src/ui-kit.js) | Shared helpers and components. |
+| [`src/dev-ui.js`](src/dev-ui.js) | The original harness — every verb, every experiment, the wire log. |
+| [`src/styles.css`](src/styles.css) + [`index.html`](index.html) | Styling and the entry point. |
 | [`src/mask-protocol.test.mjs`](src/mask-protocol.test.mjs) | `node src/mask-protocol.test.mjs` — 46 assertions against real AES and against decrypted captures of the official app. |
 | [`tools/decode-capture.mjs`](tools/decode-capture.mjs) | Decode an HCI capture into a transcript; flags unknown verbs, dumps upload payloads. |
 | [`tools/decode-viz.mjs`](tools/decode-viz.mjs) | Session analyser for high-rate streams: segments on idle gaps, per-byte statistics, decodes the visualizer. |
@@ -87,6 +97,8 @@ are gitignored — don't commit them.
 - **The visualizer protocol**: `[0x0f][effect][12 bytes = 24 packed nibbles][00 00]`. The opcode is
   **binary, not an ASCII verb**, which is why verb-hunting never found it.
 - **The panel is 46 × 58**, and `DATS` text mode only reaches a 16-row band of it.
+- **DIY image pixels are column-major** — x outer, y inner. The captures could not settle this; a
+  corner-marker upload on hardware did.
 - **`FC`'s enable byte selects a colour source**: `1` = override with literal RGB, `0` = use the
   content's own colours. Get this wrong and uploaded colour looks broken.
 - **`CHEC` works** and returns 34.

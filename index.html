@@ -2,137 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Shining Mask control</title>
-    <meta name="description" content="Web Bluetooth control surface and protocol test harness for the Shining Mask LED face mask." />
+    <meta name="description" content="Web Bluetooth control surface for the Shining Mask LED face mask — prebuilt content, sound visualizer, text and your own images." />
     <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./src/styles.css" />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23101014'/%3E%3Cpath d='M3 6h2v4H3zm4 2h2v2H7zm4-2h2v4h-2z' fill='%236ea8fe'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230a0a0f'/%3E%3Cpath d='M3 6h2v4H3zm4 2h2v2H7zm4-2h2v4h-2z' fill='%237aa2ff'/%3E%3C/svg%3E"
     />
-    <meta name="theme-color" content="#101014" />
+    <meta name="theme-color" content="#0a0a0f" />
     <script type="importmap">
       { "imports": { "preact": "./vendor/preact-standalone.mjs" } }
     </script>
-    <style>
-      :root {
-        --bg: #101014;
-        --panel: #191921;
-        --line: #2b2b38;
-        --fg: #e7e7ef;
-        --muted: #9a9aae;
-        --accent: #6ea8fe;
-        --ok: #58d68d;
-        --warn: #f5b041;
-        --err: #ec7063;
-        color-scheme: dark;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        padding: 1rem;
-        max-width: 60rem;
-        margin-inline: auto;
-        background: var(--bg);
-        color: var(--fg);
-        font: 15px/1.5 system-ui, -apple-system, sans-serif;
-      }
-      header { padding: 0.5rem 0 1rem; }
-      h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
-      .tag {
-        font-size: 0.6em; text-transform: uppercase; letter-spacing: 0.08em;
-        background: var(--line); color: var(--muted);
-        padding: 0.2em 0.5em; border-radius: 999px; vertical-align: middle;
-      }
-      header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
-      a { color: var(--accent); }
-      section {
-        background: var(--panel); border: 1px solid var(--line);
-        border-radius: 10px; padding: 0.9rem 1rem; margin-bottom: 0.9rem;
-      }
-      h2 { margin: 0 0 0.4rem; font-size: 1rem; }
-      .body { display: flex; flex-direction: column; gap: 0.6rem; }
-      .stack { display: flex; flex-direction: column; gap: 0.5rem; }
-      .note { margin: 0; color: var(--muted); font-size: 0.82rem; }
-      .row { display: flex; align-items: center; gap: 0.5rem; }
-      .row.wrap { flex-wrap: wrap; }
-      .lbl { min-width: 11rem; color: var(--muted); font-size: 0.85rem; }
-      hr { border: 0; border-top: 1px solid var(--line); margin: 0.2rem 0; width: 100%; }
-      button {
-        background: #24243040; color: var(--fg);
-        border: 1px solid var(--line); border-radius: 7px;
-        padding: 0.4rem 0.7rem; font: inherit; cursor: pointer;
-      }
-      button:hover:not(:disabled) { border-color: var(--accent); }
-      button:disabled { opacity: 0.45; cursor: not-allowed; }
-      button.primary { background: var(--accent); color: #06060a; border-color: var(--accent); font-weight: 600; }
-      button.tiny { padding: 0.2rem 0; min-width: 2rem; font-size: 0.8rem; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.2rem, 1fr)); gap: 0.25rem; }
-      input, select, output {
-        background: #0d0d12; color: var(--fg);
-        border: 1px solid var(--line); border-radius: 6px;
-        padding: 0.35rem 0.5rem; font: inherit;
-      }
-      input[type="range"] { flex: 1; padding: 0; }
-      input[type="color"] { padding: 2px; width: 3rem; height: 2rem; }
-      input[type="number"] { width: 5rem; }
-      output { min-width: 3rem; text-align: center; font-variant-numeric: tabular-nums; }
-      .wide { flex: 1; }
-      .mono, .hex, .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .preview {
-        image-rendering: pixelated; border: 1px solid var(--line);
-        border-radius: 6px; background: #111; max-width: 100%; overflow-x: auto;
-      }
-      .player { width: 100%; height: 2.2rem; }
-      .bars {
-        display: flex; align-items: flex-end; gap: 2px; height: 5rem;
-        background: #0b0b0f; border: 1px solid var(--line); border-radius: 7px; padding: 0.4rem;
-      }
-      .bars .bar { flex: 1; height: 100%; display: flex; align-items: flex-end; }
-      .bars .bar > div {
-        width: 100%; background: linear-gradient(to top, var(--accent), var(--ok));
-        border-radius: 2px; transition: height 60ms linear; min-height: 2px;
-      }
-      .sub { margin: 0; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
-      .swatches {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 0.3rem;
-      }
-      .swatch {
-        aspect-ratio: 1; border-radius: 6px; border: 1px solid #00000060;
-        display: grid; place-items: center; padding: 0; font: inherit;
-      }
-      .swatch span {
-        font-size: 0.7rem; font-weight: 700; color: #000;
-        background: #ffffffb0; border-radius: 3px; padding: 0 0.25rem;
-      }
-      .swatches.pickable .swatch { cursor: pointer; }
-      .swatches.pickable .swatch:hover { outline: 2px solid var(--fg); }
-      .swatch.active { outline: 3px solid var(--accent); }
-      code { background: #0d0d12; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; }
-      .status { margin: 0; font-size: 0.88rem; color: var(--muted); }
-      .status.connected b { color: var(--ok); }
-      .status.connecting b { color: var(--warn); }
-      .status.disconnected b { color: var(--err); }
-      .warn { color: var(--warn); font-size: 0.85rem; margin: 0; }
-      .dimmed { opacity: 0.55; }
-      .log {
-        max-height: 22rem; overflow: auto; font-size: 0.76rem;
-        background: #0b0b0f; border: 1px solid var(--line); border-radius: 7px; padding: 0.5rem;
-      }
-      .entry { display: flex; gap: 0.5rem; padding: 0.1rem 0; white-space: nowrap; }
-      .entry .at { color: #55556a; }
-      .entry .dir { width: 1rem; color: var(--muted); }
-      .entry .label { color: var(--fg); min-width: 9rem; }
-      .entry .hex { color: var(--accent); }
-      .entry .text { color: var(--ok); }
-      .entry.dir-in .label { color: var(--ok); }
-      .entry.error .label, .entry.error .text { color: var(--err); }
-      .entry.warn .label { color: var(--warn); }
-      @media (max-width: 34rem) {
-        .lbl { min-width: 100%; }
-        .row { flex-wrap: wrap; }
-      }
-    </style>
   </head>
   <body>
     <div id="app"></div>

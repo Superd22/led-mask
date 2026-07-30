@@ -198,9 +198,12 @@ It also explains an earlier anomaly: a `DATS` 5th-byte sweep at width 10 had `bi
 when the sweep reached mode `01` it wrote **slot 20**, filling it with the bitmap's `ff ff ff` bytes
 read as white pixels. That was dismissed as coincidence at the time; it was the mechanism working.
 
-**Still unconfirmed:** pixel order (row-major vs column-major). Both captured images differed
-throughout, so there was no single-pixel diff to read it from. Trivial to settle on hardware with a
-corner marker.
+**Pixel order is column-major** — x outer, y inner — confirmed on hardware. The captures alone could
+not settle it (both images differed throughout, so there was no single-pixel diff to read), so this
+came from uploading a corner-marker pattern and looking at the mask.
+
+Panel size is **46 x 58** on `MASK-9C2F6A`. Nothing in the protocol reports it, and vendor models
+differ, so the app treats size and order as device settings rather than constants.
 
 ### The old full-color question
 
