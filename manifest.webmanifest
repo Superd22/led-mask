@@ -1,0 +1,10 @@
+{
+  "name": "Shining Mask control",
+  "short_name": "LED Mask",
+  "description": "Web Bluetooth control surface and protocol test harness for the Shining Mask.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101014",
+  "theme_color": "#101014"
+}

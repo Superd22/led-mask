@@ -29,21 +29,66 @@ installed PWA on iPhone cannot do either. Target is Android; not blocking.
 ## Read next
 
 - [`docs/architecture.md`](docs/architecture.md) — the decision note: roles, design rules,
-  gotchas, and the deferred untethered-MIDI options
-- [`docs/protocol.md`](docs/protocol.md) — the mask's BLE protocol as currently understood
-- [`src/mask-protocol.js`](src/mask-protocol.js) — **untested** reference implementation of the
-  command encoding and the AES-ECB workaround
+  connection UX, the visualizer plan, and the deferred untethered-MIDI options
+- [`docs/protocol.md`](docs/protocol.md) — the mask's BLE protocol, with a per-claim source and
+  confidence table
+- [`src/mask-protocol.js`](src/mask-protocol.js) — reference implementation of the command encoding,
+  the upload handshake, and the AES-ECB workarounds
+- [`src/mask-protocol.test.mjs`](src/mask-protocol.test.mjs) — verifies that encoding against real
+  AES and against the exact bytes the two working implementations send
+  (`node src/mask-protocol.test.mjs`)
 
-## The two things most likely to trip you up
+## Nothing left to sniff
 
-1. **WebCrypto has no AES-ECB.** Use `AES-CBC` with a zero IV and slice the first 16 bytes
-   (discard WebCrypto's appended PKCS#7 block), or bundle aes-js. See `src/mask-protocol.js`.
+Both former unknowns are resolved. The primary service UUID is
+`0000fff0-0000-1000-8000-00805f9b34fb` (the standard 16-bit `0xfff0`) — confirmed independently by
+two working implementations, and absent from the Web Bluetooth blocklist, so Chrome will grant it:
+
+```js
+const device = await navigator.bluetooth.requestDevice({
+  filters: [{ namePrefix: 'MASK', services: [0xfff0] }],
+  optionalServices: [0xfff0],
+});
+```
+
+The mask connects **unbonded** — no OS pairing step. Best achievable UX is two taps (Connect, then
+pick the mask); zero-tap auto-connect needs Chrome flags, so treat it as an enhancement rather than
+the path.
+
+## The things most likely to trip you up
+
+1. **WebCrypto has no AES-ECB.** Encryption: `AES-CBC` with a zero IV, keep the first 16 bytes.
+   Decryption — which you *do* need, because notifications are encrypted too — needs a per-block
+   crafted padding block. Both are implemented and tested in
+   [`src/mask-protocol.js`](src/mask-protocol.js).
 2. **You must declare the service UUID** in `requestDevice()`. Web Bluetooth blocks undeclared
-   services — unlike bleak, you cannot write to a characteristic and let the stack find the
-   service. Sniff the primary service once via `chrome://bluetooth-internals`, then hardcode it.
+   services — unlike bleak, you cannot write to a characteristic and let the stack find the service.
+3. **Upload is a notification handshake, not a paced write loop.** `DATS` → `DATSOK` → (packet →
+   `REOK`)* → `DATCP` → `DATCPOK`. Don't use `writeValueWithoutResponse()` for the packets.
+4. **Uploaded images are one color per 16-pixel column** — a 1-bit bitmap plus a per-column RGB
+   array. You cannot push an arbitrary full-color image.
+5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; index
+   switching runs at ~24 Hz on real hardware, which is plenty.
+6. **The mask is write-only storage.** No verb lists what images are on the device, so the app has to
+   own the slot inventory and offer a full re-upload to recover from desync.
 
 ## Credits
 
-Protocol details come from public reverse-engineering work, primarily
-[this gist by Staars](https://gist.github.com/Staars/71e63e4bdefc7e3fd22377bf9c50ac12).
+Protocol details come from public reverse-engineering work. Full source-by-source table with
+confidence levels in [`docs/protocol.md`](docs/protocol.md); the main ones:
+
+- [GoneUp/mask-go](https://github.com/GoneUp/mask-go) — working Go implementation. The most complete
+  source, and the only one that implements upload.
+- [shawnrancatore/shining-mask](https://github.com/shawnrancatore/shining-mask) — working
+  CircuitPython implementation. Independently confirms the UUIDs and key, and is the source of the
+  24 Hz measurement.
+- [beclamide/mask-controller](https://github.com/beclamide/mask-controller) — has no AES key and only
+  replays opaque hex, so its blobs are **captures of the official app**. Decrypting them is the most
+  authoritative wire-format evidence available, and it settled two disagreements against mask-go.
+- [the r/ReverseEngineering thread](https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/help_me_figure_out_how_to_reverse_engineer_the/)
+  ([key comment](https://www.reddit.com/r/ReverseEngineering/comments/lr9xxr/comment/h14nm39/)) —
+  upstream origin of the AES key and protocol.
+- [gist by Staars](https://gist.github.com/Staars/71e63e4bdefc7e3fd22377bf9c50ac12) — the notes this
+  repo originally started from.
+
 Nothing here is official or endorsed by the mask's manufacturer.
