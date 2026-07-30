@@ -221,6 +221,48 @@ export async function encodeCommand(verb, args = [], declaredLength) {
   return encryptEcb(buildCommandFrame(verb, args, declaredLength));
 }
 
+/**
+ * Sound-visualizer stream, decoded from a capture of the official app.
+ *
+ * Frame: [0x0f][effect][12 bytes = 24 packed nibbles][0x00][0x00] — NOT an ASCII verb, which is why
+ * no reverse-engineering source ever found it. Each nibble is one band level, 0-15.
+ *
+ * The phone does the FFT; the mask only renders. The official app streams at ~10 Hz using ATT Write
+ * Command (no response), so frames are fire-and-forget.
+ */
+export const SPECTRUM_BANDS = 24;
+export const SPECTRUM_MAX = 15;
+/** Built-in visualizer effects observed in the capture. */
+export const VISUALIZER_EFFECTS = [0, 1, 2, 3, 4];
+/** Rate the official app uses. Also a sensible default for ours. */
+export const SPECTRUM_HZ = 10;
+
+/**
+ * Build a raw (non-ASCII-verb) frame: [len][payload…] zero-padded to one 16-byte block.
+ * `len` counts the payload only, exactly as with verb commands.
+ */
+export function buildRawFrame(payload) {
+  const bytes = Uint8Array.from(payload);
+  if (bytes.length > MAX_COMMAND_PAYLOAD) {
+    throw new Error(`raw frame payload ${bytes.length} > ${MAX_COMMAND_PAYLOAD}`);
+  }
+  const frame = new Uint8Array(BLOCK);
+  frame[0] = bytes.length;
+  frame.set(bytes, 1);
+  return frame;
+}
+
+/** Pack 24 band levels (0-15) into the 12-byte nibble array the mask expects. */
+export function packSpectrum(levels) {
+  const out = new Uint8Array(SPECTRUM_BANDS / 2);
+  for (let i = 0; i < out.length; i++) {
+    const hi = Math.max(0, Math.min(SPECTRUM_MAX, Math.round(levels[i * 2] ?? 0)));
+    const lo = Math.max(0, Math.min(SPECTRUM_MAX, Math.round(levels[i * 2 + 1] ?? 0)));
+    out[i] = (hi << 4) | lo;
+  }
+  return out;
+}
+
 /** Scroll modes for `command.mode`. */
 export const MODE = {
   steady: 1,
@@ -381,8 +423,15 @@ export const command = {
     }
     return encodeCommand('DELE', [indices.length, ...indices.map(clampByte)]);
   },
-  /** Ask how many images are uploaded. UNVERIFIED. */
+  /** Ask how many images are uploaded. Confirmed: replies CHEC + a count byte (observed 34). */
   checkCount: () => encodeCommand('CHEC'),
+
+  /**
+   * One frame of the sound visualizer: 24 band levels (0-15) plus the effect index.
+   * Stream these at ~SPECTRUM_HZ with writeValueWithoutResponse, as the official app does.
+   */
+  spectrum: (levels, effect = 0) =>
+    encryptEcb(buildRawFrame([effect & 0xff, ...packSpectrum(levels), 0, 0])),
 };
 
 function clampByte(n) {

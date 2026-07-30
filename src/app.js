@@ -21,6 +21,10 @@ import {
   DIY_WIDTH,
   DIY_HEIGHT,
   DIY_IMAGE_BYTES,
+  SPECTRUM_BANDS,
+  SPECTRUM_MAX,
+  SPECTRUM_HZ,
+  VISUALIZER_EFFECTS,
   encryptEcb,
 } from './mask-protocol.js';
 
@@ -502,6 +506,130 @@ function ColorBank() {
  * Payload is raw RGB, 3 bytes per pixel, 46 x 58 = 8004 bytes. Unlike the text path this writes a
  * PERSISTENT slot, addressable afterwards with PLAY.
  */
+/**
+ * Sound visualizer — the official app's own protocol, decoded from a capture.
+ *
+ * The phone does the FFT and streams 24 band levels; the mask renders one of 5 built-in effects.
+ * Frame is [0x0f][effect][12 bytes = 24 nibbles][00 00], sent fire-and-forget at ~10 Hz.
+ *
+ * This is the native path, so it looks exactly like the official app rather than an approximation.
+ */
+function Visualizer() {
+  const [running, setRunning] = useState(false);
+  const [effect, setEffect] = useState(0);
+  const [hz, setHz] = useState(SPECTRUM_HZ);
+  const [gain, setGain] = useState(2.2);
+  const [bands, setBands] = useState(() => new Array(SPECTRUM_BANDS).fill(0));
+  const [err, setErr] = useState('');
+
+  const audioRef = useRef(null);
+  const timerRef = useRef(null);
+  // Refs so the streaming loop reads live values instead of the closure it was created with.
+  const live = useRef({ effect, gain, hz });
+  live.current = { effect, gain, hz };
+
+  const stop = () => {
+    clearInterval(timerRef.current);
+    timerRef.current = null;
+    audioRef.current?.stream.getTracks().forEach((t) => t.stop());
+    audioRef.current?.ctx.close();
+    audioRef.current = null;
+    setRunning(false);
+    setBands(new Array(SPECTRUM_BANDS).fill(0));
+  };
+
+  const start = async () => {
+    setErr('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.6;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const bins = new Uint8Array(analyser.frequencyBinCount);
+      audioRef.current = { ctx, stream, analyser, bins };
+      setRunning(true);
+      tick();
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  /** Log-spaced buckets: linear FFT bins would put almost everything in the first few bands. */
+  const tick = () => {
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(async () => {
+      const a = audioRef.current;
+      if (!a) return;
+      a.analyser.getByteFrequencyData(a.bins);
+
+      const nyquist = a.ctx.sampleRate / 2;
+      const minHz = 40;
+      const maxHz = Math.min(12000, nyquist);
+      const out = new Array(SPECTRUM_BANDS).fill(0);
+      for (let b = 0; b < SPECTRUM_BANDS; b++) {
+        const lo = minHz * (maxHz / minHz) ** (b / SPECTRUM_BANDS);
+        const hi = minHz * (maxHz / minHz) ** ((b + 1) / SPECTRUM_BANDS);
+        const i0 = Math.floor((lo / nyquist) * a.bins.length);
+        const i1 = Math.max(i0 + 1, Math.floor((hi / nyquist) * a.bins.length));
+        let peak = 0;
+        for (let i = i0; i < i1 && i < a.bins.length; i++) peak = Math.max(peak, a.bins[i]);
+        out[b] = Math.max(0, Math.min(SPECTRUM_MAX,
+          Math.round((peak / 255) * SPECTRUM_MAX * live.current.gain)));
+      }
+      setBands(out);
+      if (mask.connected) {
+        try {
+          await mask.sendSpectrum(command.spectrum(out, live.current.effect));
+        } catch (e) {
+          mask.log('sys', `spectrum: ${e.message}`, null, '', 'error');
+        }
+      }
+    }, 1000 / live.current.hz);
+  };
+
+  useEffect(() => { if (running) tick(); }, [hz]);
+  useEffect(() => stop, []); // stop the mic when the component goes away
+
+  return html`
+    <${Section} title="Sound visualizer — native"
+      note=${`The official app's own protocol, decoded from a capture: it runs the FFT on the phone and
+              streams ${SPECTRUM_BANDS} band levels (0-${SPECTRUM_MAX}); the mask renders. Frame is
+              [0x0f][effect][12 bytes of nibbles][00 00], fire-and-forget at ~${SPECTRUM_HZ} Hz.`}>
+      <div class="bars">
+        ${bands.map((v) => html`
+          <div class="bar"><div style=${`height:${(v / SPECTRUM_MAX) * 100}%`}></div></div>
+        `)}
+      </div>
+
+      <div class="row wrap">
+        <${Btn} kind=${running ? '' : 'primary'} onClick=${() => (running ? stop() : start())}>
+          ${running ? 'Stop' : 'Start microphone'}
+        <//>
+        <span class="lbl">Effect</span>
+        ${VISUALIZER_EFFECTS.map((e) => html`
+          <button class=${effect === e ? 'primary' : ''} onClick=${() => setEffect(e)}>${e}</button>
+        `)}
+      </div>
+
+      <${Slider} label=${`Rate (${hz} Hz)`} value=${hz} setValue=${setHz}
+        onCommit=${() => {}} min=${1} max=${25} />
+      <${Slider} label=${`Gain (${(gain).toFixed(1)}x)`} value=${Math.round(gain * 10)}
+        setValue=${(v) => setGain(v / 10)} onCommit=${() => {}} min=${5} max=${60} />
+
+      ${err && html`<p class="warn">${err}</p>`}
+      <p class="note">
+        Bands are log-spaced from 40 Hz to 12 kHz — linear FFT bins would pile almost everything into
+        the first few bands. The official app streams at ${SPECTRUM_HZ} Hz; commands cost ~11 ms, so
+        there is headroom above that if you want it.
+      </p>
+    <//>
+  `;
+}
+
 function DiyImage() {
   const [slot, setSlot] = useState(5);
   const [rowMajor, setRowMajor] = useState(true);
@@ -920,6 +1048,7 @@ function App() {
       <${DiySlots} />
       <${ColorBank} />
       <${Appearance} />
+      <${Visualizer} />
       <${DiyImage} />
       <${Upload} />
       <${UploadLab} />

@@ -172,6 +172,19 @@ export class MaskTransport extends EventTarget {
     return this._write(CHARACTERISTIC.command, await bytesOrPromise, label);
   }
 
+  /**
+   * Fire-and-forget write for the visualizer stream. The official app uses ATT Write Command (no
+   * response) at ~10 Hz; awaiting a response per frame would halve the achievable rate.
+   * Silent by default — logging 10 frames/sec would bury everything else.
+   */
+  async sendSpectrum(bytesOrPromise) {
+    if (!this.connected) throw new Error('not connected');
+    const char = this.chars.command;
+    const bytes = await bytesOrPromise;
+    if (char.writeValueWithoutResponse) await char.writeValueWithoutResponse(bytes);
+    else await char.writeValue(bytes);
+  }
+
   /** Write plaintext bytes straight to the bulk upload characteristic. */
   async sendUploadRaw(bytes, label) {
     return this._write(CHARACTERISTIC.upload, bytes, label || 'upload(raw)');

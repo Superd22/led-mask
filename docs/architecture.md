@@ -103,11 +103,13 @@ Two things make the remaining friction near-zero anyway:
 
 ## Audio-reactive visualizer
 
-**The official app has a sound visualizer; its protocol is being decoded.** An earlier draft here
-claimed no built-in visualizer existed — that was an over-reading of "no public source documents it".
-See [protocol.md](protocol.md#audio--visualizer-mode--under-investigation). Whether it runs on the
-mask or is streamed from the phone changes the design, so the host-side plan below is the fallback,
-not necessarily the answer.
+**Solved: the mask has a native visualizer API, and it is host-driven.** The phone runs the FFT and
+streams 24 band levels at ~10 Hz; the mask renders one of 5 built-in effects. See
+[protocol.md](protocol.md#sound-visualizer--solved).
+
+That is better than the host-side plan below, because the mask does the rendering: we send 16 bytes
+per frame instead of driving shape and colour ourselves. The plan below is still how you would build
+a *custom* visualizer that does not look like the official app's.
 
 So the visualizer is host-side, and it's realistic within the transport budget above:
 

@@ -427,7 +427,45 @@ without the ability to repair it precisely.
 The mask accepts **one BLE central at a time**, so the phone and the Mac cannot both hold the link.
 Handoff has to be explicit in the UI rather than something you discover as a bug.
 
-## Audio / visualizer mode — under investigation
+## Sound visualizer — SOLVED
+
+Decoded from a capture of the official app. **It is host-driven**: the phone runs the FFT and streams
+band levels; the mask only renders.
+
+```
+[ 0x0f ][ effect ][ 12 bytes = 24 packed nibbles ][ 0x00 ][ 0x00 ]
+```
+
+- Same `[len][payload]` framing as everything else, but the opcode is **binary, not an ASCII verb** —
+  which is exactly why no reverse-engineering source ever found it, and why this repo's own decoder
+  initially reported "no decodable frames" on a capture full of them.
+- `effect` selects one of **5 built-in visualizers**, `0x00`–`0x04`. There is no separate
+  mode-select command; the effect travels in every frame.
+- 24 bands, one **nibble each, 0–15**. Observed values topped out at 9.
+- Sent to the command characteristic as **ATT Write Command** (no response) at **~10 Hz**.
+- The two trailing zero bytes never varied.
+
+Changing the audio source (music vs microphone) produces **no BLE traffic** — the phone just analyses
+a different input.
+
+Since commands cost ~11 ms, 10 Hz leaves plenty of headroom; the official app is not pushing the link.
+
+Implemented in [`../src/mask-protocol.js`](../src/mask-protocol.js) as `command.spectrum(levels,
+effect)` and driven from Web Audio in the app's **Sound visualizer** panel.
+
+### How it was found
+
+[`../tools/decode-viz.mjs`](../tools/decode-viz.mjs) segments a capture on idle gaps and reports
+per-argument-byte statistics. The effect blocks line up one-to-one with the actions performed during
+the capture, which is what confirmed `effect` rather than, say, a sequence counter:
+
+```
+effect 0x04    0.0.. 10.0s   9.7/s      effect 0x02  542.0..549.4s   9.2/s
+effect 0x00   12.7.. 20.3s   9.4/s      effect 0x03  549.6..553.8s   9.9/s
+effect 0x01   20.4.. 29.5s   9.7/s      effect 0x04  554.0..557.5s  10.0/s
+```
+
+## Old notes on the audio mode
 
 **The official app HAS a sound visualizer.** An earlier version of this document said no such mode
 existed; that was wrong. What was actually true is narrower: *no public reverse-engineering source

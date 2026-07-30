@@ -22,7 +22,7 @@
  */
 import fs from 'node:fs';
 import {
-  readCapture, collectFrames, KNOWN_VERBS, asUploadPacket,
+  readCapture, collectFrames, KNOWN_VERBS, asUploadPacket, asSpectrum,
 } from './lib/btsnoop.mjs';
 
 const args = process.argv.slice(2);
@@ -159,6 +159,54 @@ for (const [key, entries] of [...byVerb].sort((a, b) => b[1].length - a[1].lengt
   }
 }
 
+// ---------------------------------------------------------------- spectrum stream
+
+const spectra = cmds.map((f) => ({ f, s: asSpectrum(f.cmd) })).filter((x) => x.s);
+if (spectra.length) {
+  console.log(`\n${'='.repeat(78)}`);
+  console.log('SOUND VISUALIZER STREAM');
+  console.log('='.repeat(78));
+  const dur = Number(spectra.at(-1).f.micros - spectra[0].f.micros) / 1e6;
+  console.log(
+    `${spectra.length} frames over ${dur.toFixed(1)}s = ${(spectra.length / dur).toFixed(1)}/s\n` +
+      `Format: [0x0f][effect][12 bytes = 24 packed nibbles][00 00], one nibble per band, 0-15.\n`,
+  );
+
+  const effects = [...new Set(spectra.map((x) => x.s.effect))].sort();
+  console.log(`Effects seen: ${effects.map((e) => `0x${e.toString(16).padStart(2, '0')}`).join(', ')}`);
+
+  // Contiguous runs of one effect = the periods between the user changing settings.
+  const blocks = [];
+  for (const x of spectra) {
+    const last = blocks.at(-1);
+    if (!last || last.effect !== x.s.effect) blocks.push({ effect: x.s.effect, a: x.f, b: x.f, n: 0, peak: 0 });
+    const blk = blocks.at(-1);
+    blk.b = x.f;
+    blk.n++;
+    blk.peak = Math.max(blk.peak, ...x.s.bands);
+  }
+  console.log('\nEffect blocks (line these up with your actions):');
+  for (const b of blocks.filter((x) => x.n > 2)) {
+    const d = Number(b.b.micros - b.a.micros) / 1e6;
+    console.log(
+      `  effect 0x${b.effect.toString(16).padStart(2, '0')}  ` +
+        `${secs(b.a.micros).toFixed(1)}..${secs(b.b.micros).toFixed(1)}s  ` +
+        `n=${String(b.n).padEnd(4)} ${(b.n / Math.max(0.1, d)).toFixed(1)}/s  peak band ${b.peak}`,
+    );
+  }
+
+  // A crude sparkline of total energy, to eyeball whether it tracks the audio.
+  const N = 60;
+  const step = Math.max(1, Math.floor(spectra.length / N));
+  const ramp = ' .:-=+*#%@';
+  let spark = '';
+  for (let i = 0; i < spectra.length; i += step) {
+    const avg = spectra[i].s.bands.reduce((a, b) => a + b, 0) / 24;
+    spark += ramp[Math.min(ramp.length - 1, Math.round((avg / 15) * (ramp.length - 1)))];
+  }
+  console.log(`\nEnergy over time:\n  |${spark}|`);
+}
+
 // ---------------------------------------------------------------- verdict
 
 console.log(`\n${'='.repeat(78)}`);
@@ -170,7 +218,10 @@ const streaming = [...byVerb.entries()].filter(([, e]) => {
   return e.length > 50 && dur > 2 && e.length / dur > 5;
 });
 
-if (streaming.length) {
+if (spectra.length) {
+  console.log('HOST-DRIVEN, and decoded. The phone runs the FFT and streams band levels;');
+  console.log('the mask only renders. We can drive this from Web Audio at the same rate.');
+} else if (streaming.length) {
   console.log('HOST-DRIVEN. The phone is streaming values to the mask:');
   for (const [, e] of streaming) {
     const dur = Number(e.at(-1).micros - e[0].micros) / 1e6;

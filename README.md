@@ -72,8 +72,9 @@ the path.
    is `[1-bit bitmap][one RGB per column]`, lands on the live display in a 16-row band. `0x01` =
    image: field 2 is the **destination slot**, payload is **raw RGB 3 bytes/pixel**, and it writes a
    **persistent** slot. Decoded from a capture of the official app.
-5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; commands are
-   ~11 ms on real hardware, so 24 Hz is comfortable. Uploads are ~300 ms, so they are not per-frame.
+5. **The sound visualizer is host-driven and decoded.** The phone runs the FFT and streams
+   `[0x0f][effect][24 nibbles][00 00]` at ~10 Hz; the mask renders one of 5 built-in effects. The
+   opcode is **binary, not an ASCII verb**, which is why no public source ever found it.
 6. **The mask cannot be queried.** No verb lists what is on the device, so the app owns its inventory.
 7. **The panel is 46 × 58** — from the capture, where `DATS` declared 8004 = 46 × 58 × 3 bytes.
 8. **`FC`'s enable byte picks a colour source**: `1` = override with literal RGB, `0` = use the

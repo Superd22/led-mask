@@ -83,6 +83,15 @@
         image-rendering: pixelated; border: 1px solid var(--line);
         border-radius: 6px; background: #111; max-width: 100%; overflow-x: auto;
       }
+      .bars {
+        display: flex; align-items: flex-end; gap: 2px; height: 5rem;
+        background: #0b0b0f; border: 1px solid var(--line); border-radius: 7px; padding: 0.4rem;
+      }
+      .bars .bar { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+      .bars .bar > div {
+        width: 100%; background: linear-gradient(to top, var(--accent), var(--ok));
+        border-radius: 2px; transition: height 60ms linear; min-height: 2px;
+      }
       .sub { margin: 0; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
       .swatches {
         display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 0.3rem;
