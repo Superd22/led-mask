@@ -115,7 +115,7 @@ Byte layouts below are quoted from **[bd]** in its `06LIGHTnn` shorthand, cross-
 | `PLAY` | 6 | `01` then 1 index byte | Show an uploaded ("DIY") image | **[go][cp][bd]** |
 | `SPEED` | 6 | 1 byte | Text scroll speed, 0–255 | **[js][go][bd]** |
 | `M` | 3 | 1 enable byte, 1 mode byte | Text color mode. `00`–`03` gradients, `04`–`07` background image (`04` x-mask, `05` christmas, `06` love, `07` scream) | **[go][bd]** |
-| `FC` | 6 | 1 enable byte, 3 color bytes | Foreground color. **Confirmed working on hardware with `enable = 1`.** ⚠️ byte order still unconfirmed | **[js][go][bd]** + hardware |
+| `FC` | 6 | 1 enable byte, **R, G, B** | Foreground color. **Confirmed on hardware: `enable = 1`, byte order RGB.** | **[js][go][bd]** + hardware |
 | `BC` | 6 | 1 enable byte, 3 color bytes | Text background color | **[js][bd]** — **not** `BG` |
 | `DATS` | 9 | 2-byte total len, 2-byte bitmap len, 1 zero byte | Begin an upload | **[go][bd]** |
 | `DATCP` | 5 | — | Finish an upload | **[js][go][bd]** |
@@ -140,13 +140,47 @@ for these verbs and reads a fixed arg count. But matching the real app costs not
 `06 "BC" 00 7f 7f 7f`, so **[bd]** was right and **[go]**'s `BG` is the outlier — most likely never
 exercised, since mask-controller's own author left this path commented out.
 
-#### Still unresolved: `FC` color byte order ⚠️
+#### Settled: `FC` is RGB, with `enable = 1`
 
-**[bd]** documents the wire order as `<RR> <BB> <GG>` — red, **blue**, green. The **[go]** code
-appends `r, g, b`. **[js]**'s capture decrypts to `06 "FC" 00 ff ff fe`, which confirms the verb,
-the length and the leading enable byte, but a near-white value can't distinguish the two orderings.
+**[bd]** documented the order as `<RR> <BB> <GG>`. **[go]** appends `r, g, b`. Hardware settles it:
+pure red renders red, so the order is **RGB** and **[go]** was right.
 
-We follow **[go]** (RGB). Cheap to settle on hardware: send pure red and see what lights up.
+`enable = 1` is what takes effect. Curiously the official app sends `enable = 0`, so that byte is
+probably selecting a colour *source* — e.g. `0` = use the gradient/mode from `M`, `1` = use these
+literal bytes — rather than being a plain on/off.
+
+### The full-color question
+
+**Open, and the most valuable thing left to answer.** Two facts point in opposite directions:
+
+- The official app's DIY images are **full color** — so the hardware *can* address colour per pixel.
+- The only upload format we have implemented is 1-bit bitmap + one RGB per column, which physically
+  cannot express that. And on hardware its colour section is ignored entirely.
+
+So there is almost certainly an upload path we have not found. Notably, the original **[rd]**-derived
+notes described the payload as *"raw RGB, 3 bytes per pixel"* — a full-color format. This repo
+previously replaced that claim with **[go]**'s per-column format, but **both are probably real,
+describing different paths**: **[go]** implements the *text* upload, and the gist may have been
+describing the *image* upload. Discarding it was likely a mistake.
+
+Candidate mechanisms, cheapest first:
+
+1. **`DATS`'s 5th arg byte.** Unexplained in every source; all send `0`. Prime suspect for selecting a
+   destination slot or a payload format. Sweepable — the Upload lab in the app does this.
+2. **`bitmapLen = 0`.** If there is no bitmap section, the mask may treat the whole payload as raw
+   pixel data.
+3. **Pixel order**, if a full-color format exists: column-major or row-major is unknown.
+4. **`DELE` and `CHEC`** exist in **[rd]** and nowhere else — "delete uploaded images" and "query how
+   many images are uploaded". Both only make sense if a *writable* slot bank exists, which is further
+   evidence the path is there.
+
+**The decisive test is an Android HCI snoop capture** of the official app performing a DIY image
+upload. Developer options → *Enable Bluetooth HCI snoop log* → do the upload → pull
+`btsnoop_hci.log` → Wireshark. Since the AES key is known, every command decrypts. That single capture
+would settle the format, the slot mechanism, the real slot count, and whether a music mode exists.
+
+**Test design note:** any full-color experiment should use a pattern that varies **vertically within a
+column**. Per-column colour cannot produce vertical variation, so it is the unambiguous signal.
 
 ## Image upload
 

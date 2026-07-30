@@ -200,8 +200,8 @@ export class MaskTransport extends EventTarget {
    * Run the full upload handshake: DATS -> DATSOK -> (packet -> REOK)* -> DATCP -> DATCPOK.
    * Drives the generator from mask-protocol.js and feeds it real notifications.
    */
-  async upload(payload, bitmapLength, onProgress) {
-    const run = uploadSequence(payload, bitmapLength);
+  async upload(payload, bitmapLength, { trailing = 0, onProgress } = {}) {
+    const run = uploadSequence(payload, bitmapLength, trailing);
     let step = run.next();
     let n = 0;
     while (!step.done) {

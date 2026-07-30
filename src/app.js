@@ -16,6 +16,7 @@ import {
   encodeColors,
   buildUploadPayload,
   buildCommandFrame,
+  buildFullColorPayload,
   encryptEcb,
 } from './mask-protocol.js';
 
@@ -309,9 +310,9 @@ function Upload() {
     const colors = encodeColors(columns.map(() => hexToRgb(color)));
     const { payload, bitmapLength } = buildUploadPayload(bitmap, colors);
     setProgress(`uploading ${payload.length} bytes…`);
-    const packets = await mask.upload(payload, bitmapLength, (n, resp) =>
-      setProgress(`packet ${n} — ${resp}`),
-    );
+    const packets = await mask.upload(payload, bitmapLength, {
+      onProgress: (n, resp) => setProgress(`packet ${n} — ${resp}`),
+    });
     setProgress(`done, ${packets} packets`);
   };
 
@@ -340,7 +341,9 @@ function Upload() {
           const colors = hexToBytes('fffffc'.repeat(32));
           const { payload, bitmapLength } = buildUploadPayload(bitmap, colors);
           setProgress('uploading mask-go capture…');
-          const n = await mask.upload(payload, bitmapLength, (i, r) => setProgress(`packet ${i} — ${r}`));
+          const n = await mask.upload(payload, bitmapLength, {
+            onProgress: (i, r) => setProgress(`packet ${i} — ${r}`),
+          });
           setProgress(`done, ${n} packets`);
         }}>Upload mask-go's known-good capture<//>
       </div>
@@ -465,6 +468,144 @@ function ColorBank() {
       <p class="note">
         Uses the per-column RGB, which hardware says is ignored — kept so the two are easy to compare
         side by side. Measured ~300-350ms per upload from your logs.
+      </p>
+    <//>
+  `;
+}
+
+/**
+ * Upload lab — probes the two open questions:
+ *
+ *   1. Can we write a persistent DIY slot?
+ *   2. Can we address color per pixel (not per column)?
+ *
+ * Both may hinge on the same byte. DATS's 5th arg is unexplained in every source (all send 0), which
+ * makes it the obvious candidate for selecting an upload destination or format. And the original
+ * reddit notes described the payload as "raw RGB, 3 bytes per pixel" — a full-color format that
+ * mask-go's per-column text format cannot express, yet the official app's DIY images clearly are full
+ * color. So both formats are probably real, for different paths.
+ *
+ * The test pattern varies hue horizontally AND brightness vertically. The vertical variation is the
+ * tell: per-column color physically cannot produce it, so if we see it, full-color works.
+ */
+function UploadLab() {
+  const [width, setWidth] = useState(46);
+  const [trailing, setTrailing] = useState(0);
+  const [format, setFormat] = useState('fullcolor');
+  const [columnMajor, setColumnMajor] = useState(true);
+  const [bitmapLenMode, setBitmapLenMode] = useState('zero');
+  const [result, setResult] = useState('');
+  const canvasRef = useRef(null);
+
+  const colorAt = (x, y) => {
+    const hue = (x / Math.max(1, width - 1)) * 330;
+    const light = 0.15 + 0.7 * (y / (DISPLAY_HEIGHT - 1)); // vertical ramp = the decisive signal
+    return hslToRgb(hue, 1, light);
+  };
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const scale = 8;
+    c.width = width * scale; c.height = DISPLAY_HEIGHT * scale;
+    const ctx = c.getContext('2d');
+    for (let x = 0; x < width; x++)
+      for (let y = 0; y < DISPLAY_HEIGHT; y++) {
+        ctx.fillStyle = rgbToHex(colorAt(x, y));
+        ctx.fillRect(x * scale, y * scale, scale, scale);
+      }
+  }, [width]);
+
+  const build = () => {
+    if (format === 'fullcolor') {
+      const payload = buildFullColorPayload(width, colorAt, columnMajor);
+      const bitmapLength = bitmapLenMode === 'zero' ? 0 : payload.length;
+      return { payload, bitmapLength };
+    }
+    // Per-column format, for comparison: same hue ramp, but colour can only vary horizontally.
+    const cols = Array.from({ length: width }, () => Array(DISPLAY_HEIGHT).fill(1));
+    const bitmap = encodeBitmap(cols);
+    const colors = encodeColors(cols.map((_, x) => colorAt(x, DISPLAY_HEIGHT - 1)));
+    return buildUploadPayload(bitmap, colors);
+  };
+
+  const send = async (t = trailing) => {
+    const { payload, bitmapLength } = build();
+    setResult(`sending ${payload.length}B, bitmapLen=${bitmapLength}, DATS[5]=${t}…`);
+    await mask.upload(payload, bitmapLength, { trailing: t });
+    setResult(`sent ${payload.length}B (${Math.ceil(payload.length / 98)} pkts), DATS[5]=${t} — ` +
+      `look for VERTICAL color variation; per-column colour cannot do that.`);
+  };
+
+  const sweepTrailing = async () => {
+    for (let t = 0; t <= 20; t++) {
+      setResult(`DATS[5]=${t} — watch the mask, then check PLAY ${t}`);
+      setTrailing(t);
+      try { await send(t); } catch (err) { mask.log('sys', `DATS[5]=${t}: ${err.message}`, null, '', 'error'); }
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    setResult('sweep done. Now sweep PLAY 1→30 in Experiments: did any slot gain a gradient?');
+  };
+
+  const { payload, bitmapLength } = build();
+
+  return html`
+    <${Section} title="Upload lab — full color & slot writing"
+      note=${`Probes whether per-pixel color and DIY-slot writing are reachable. The pattern below
+              varies hue horizontally AND brightness vertically; the vertical part is decisive, since
+              per-column color cannot produce it.`}>
+      <canvas ref=${canvasRef} class="preview"></canvas>
+
+      <div class="row wrap">
+        <label class="row"><span class="lbl">Width</span>
+          <input type="number" min="1" max="255" value=${width}
+            onInput=${(e) => setWidth(Math.max(1, +e.target.value))} /></label>
+        <label class="row"><span class="lbl">DATS 5th byte</span>
+          <input type="number" min="0" max="255" value=${trailing}
+            onInput=${(e) => setTrailing(+e.target.value)} /></label>
+      </div>
+
+      <div class="row wrap">
+        <span class="lbl">Payload format</span>
+        <button class=${format === 'fullcolor' ? 'primary' : ''}
+          onClick=${() => setFormat('fullcolor')}>raw RGB per pixel</button>
+        <button class=${format === 'percolumn' ? 'primary' : ''}
+          onClick=${() => setFormat('percolumn')}>bitmap + per-column</button>
+      </div>
+
+      ${format === 'fullcolor' && html`
+        <div class="row wrap">
+          <span class="lbl">Pixel order</span>
+          <button class=${columnMajor ? 'primary' : ''} onClick=${() => setColumnMajor(true)}>
+            column-major
+          </button>
+          <button class=${!columnMajor ? 'primary' : ''} onClick=${() => setColumnMajor(false)}>
+            row-major
+          </button>
+        </div>
+        <div class="row wrap">
+          <span class="lbl">DATS bitmapLen</span>
+          <button class=${bitmapLenMode === 'zero' ? 'primary' : ''}
+            onClick=${() => setBitmapLenMode('zero')}>0 (no bitmap section)</button>
+          <button class=${bitmapLenMode === 'full' ? 'primary' : ''}
+            onClick=${() => setBitmapLenMode('full')}>= total</button>
+        </div>
+      `}
+
+      <p class="note">
+        Payload ${payload.length} bytes, bitmapLen ${bitmapLength},
+        ${Math.ceil(payload.length / 98)} packets. Ceiling is 25,088 bytes.
+      </p>
+
+      <div class="row wrap">
+        <${Btn} kind="primary" onClick=${() => send()}>Send once<//>
+        <${Btn} onClick=${sweepTrailing}>Sweep DATS 5th byte 0→20<//>
+      </div>
+      ${result && html`<p class="status">${result}</p>`}
+
+      <p class="note">
+        If none of this works, the answer is an Android HCI snoop capture of the official app doing a
+        DIY upload — you have the AES key, so it would show the exact bytes.
       </p>
     <//>
   `;
@@ -603,6 +744,7 @@ function App() {
       <${ColorBank} />
       <${Appearance} />
       <${Upload} />
+      <${UploadLab} />
       <${Experiments} />
       <${RawConsole} />
     </div>

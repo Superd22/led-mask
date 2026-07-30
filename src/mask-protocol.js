@@ -292,17 +292,20 @@ export const command = {
     encodeCommand('BC', [enable ? 1 : 0, clampByte(r), clampByte(g), clampByte(b)]),
 
   /**
-   * Announce an upload. Declares the total payload length AND the length of its bitmap section —
-   * that split is how the mask locates the start of the per-column color array. The trailing zero
-   * byte is unidentified but is what [go] sends.
+   * Announce an upload. Declares the total payload length AND the length of its bitmap section.
+   *
+   * `trailing` is the 5th arg byte. Every known implementation sends 0 and nobody has explained it,
+   * which makes it the prime suspect for selecting an upload *destination* or *format* — the two
+   * things we cannot currently do (write a DIY slot; send full-color pixel data). Exposed so it can
+   * be swept. See ../docs/protocol.md#the-full-color-question.
    */
-  beginUpload: (totalBytes, bitmapBytes) =>
+  beginUpload: (totalBytes, bitmapBytes, trailing = 0) =>
     encodeCommand('DATS', [
       (totalBytes >> 8) & 0xff,
       totalBytes & 0xff,
       (bitmapBytes >> 8) & 0xff,
       bitmapBytes & 0xff,
-      0,
+      trailing & 0xff,
     ]),
 
   /** Finish an upload. Expect a DATCPOK notification. */
@@ -371,6 +374,35 @@ export function encodeColors(colors) {
   return out;
 }
 
+/**
+ * Build a full-color payload: 3 bytes per PIXEL, not per column.
+ *
+ * This is the format the original reddit-derived notes described ("payload is raw RGB, 3 bytes per
+ * pixel"), which this file previously discarded in favour of mask-go's bitmap + per-column color.
+ * Both are probably real, describing different upload paths — the official app's DIY images are
+ * full color, which the per-column format cannot express.
+ *
+ * `colorAt(x, y)` returns [r, g, b]. Pixel order is unknown, hence `columnMajor`.
+ */
+export function buildFullColorPayload(width, colorAt, columnMajor = true) {
+  const out = new Uint8Array(width * DISPLAY_HEIGHT * 3);
+  let i = 0;
+  if (columnMajor) {
+    for (let x = 0; x < width; x++)
+      for (let y = 0; y < DISPLAY_HEIGHT; y++) {
+        const [r, g, b] = colorAt(x, y);
+        out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
+      }
+  } else {
+    for (let y = 0; y < DISPLAY_HEIGHT; y++)
+      for (let x = 0; x < width; x++) {
+        const [r, g, b] = colorAt(x, y);
+        out[i++] = clampByte(r); out[i++] = clampByte(g); out[i++] = clampByte(b);
+      }
+  }
+  return out;
+}
+
 /** Concatenate the two sections into the upload payload: bitmap first, then colors. */
 export function buildUploadPayload(bitmap, colors) {
   const payload = new Uint8Array(bitmap.length + colors.length);
@@ -427,7 +459,7 @@ export function buildUploadPackets(payload) {
  *     step = run.next(await nextNotification());
  *   }
  */
-export function* uploadSequence(payload, bitmapLength) {
+export function* uploadSequence(payload, bitmapLength, trailing = 0) {
   const expect = (response, wanted) => {
     if (!response?.startsWith(wanted)) {
       throw new Error(`upload: expected ${wanted}, got ${JSON.stringify(response)}`);
@@ -435,7 +467,10 @@ export function* uploadSequence(payload, bitmapLength) {
   };
 
   expect(
-    yield { characteristic: CHARACTERISTIC.command, data: command.beginUpload(payload.length, bitmapLength) },
+    yield {
+      characteristic: CHARACTERISTIC.command,
+      data: command.beginUpload(payload.length, bitmapLength, trailing),
+    },
     'DATSOK',
   );
 
