@@ -74,7 +74,8 @@ the path.
 5. **There is no built-in music/visualizer mode** to send packets to. Build it host-side; commands are
    ~11 ms on real hardware, so 24 Hz is comfortable. Uploads are ~300 ms, so they are not per-frame.
 6. **The mask cannot be queried.** No verb lists what is on the device, so the app owns its inventory.
-7. **The display is 46 columns × 16 rows** on the unit tested. No public source states this.
+7. **The panel is ~46 × 48, but `DATS` only reaches a 16-row text band.** DIY images are true
+   per-pixel colour and fill the whole face, so they use a path nobody has reverse engineered yet.
 
 ## Credits
 

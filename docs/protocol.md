@@ -10,7 +10,8 @@ below.** Where a claim here contradicts a source, this wins.
 | Finding | Detail |
 |---|---|
 | **Discovery and connect work** | `namePrefix: 'MASK'` + service `0xfff0` resolves; unbonded, no OS pairing. `startNotifications()` on `…9601` succeeds. |
-| **Display is 46 columns** wide, 16 high | Measured: a 32-column upload rendered as a partial rectangle. No source states this. |
+| **Panel is ~46 × 48; the upload path only reaches a 16-row band** | A diagonal pattern (one lit row per column, wrapping every 16) rendered as three staircases of 16 steps filling roughly **a third** of the face height. So `DATS` addresses a 16-row *text band*, not the display. |
+| **DIY images ARE true per-pixel colour** | Confirmed by eye: official-app DIY images show colour varying **vertically within a single column**, which per-column colour physically cannot produce. They also fill the full face height. |
 | **Upload writes the LIVE display, not a DIY slot** | 20 successful uploads (every step ACKed), then `PLAY 1…3` still showed the pre-existing official-app DIY images. `DATS` carries no slot index because there is no slot to address. |
 | **Uploaded per-column RGB WORKS** | ✅ Corrected. A rainbow renders in full colour at full width — **provided `FC enable=0` is sent first**. An earlier red fill rendered white only because an `FC enable=1` override was still active. |
 | **`FC` with `enable = 1` DOES set the colour** | Confirmed. This is the colour control, not the upload payload — and at ~11 ms it is 30× cheaper. Note the official app sends `enable = 0`, so that byte is doing more than a simple on/off. |
@@ -21,7 +22,7 @@ below.** Where a claim here contradicts a source, this wins.
 | **`CHEC` works and returns 34** | Reply frame is `[05]["CHEC"][0x22]`. So slots are countable, there are more than the 20 [cp] assumed, and the notify channel does more than upload ACKs. Makes `DELE` likely real too. |
 | **`FC`'s `enable` byte selects a colour SOURCE** | `1` = override everything with these literal RGB bytes. `0` = use the content's own colours. This is why the official app always sends `0`, and why an upload's colours were previously invisible. |
 | **`DATS` `bitmapLen = total` renders the whole payload as bitmap bits** | Random on/off LEDs. Confirms the payload is simply split `[bitmap: bitmapLen bytes][colours: remainder]` — there is **no raw-RGB-per-pixel mode** on this path. |
-| **Our uploads do not fill the display vertically** | All 16 bits set per column still renders short, while DIY slot 20 fills the whole face. Suggests DIY images use a **richer format than this upload path** — more rows, and possibly true per-pixel colour. |
+| **`DATS`'s 5th arg byte is NOT a slot index** | Swept 0→20 with a known-good payload; no slot gained the uploaded content. Its meaning remains unknown. |
 
 The practical consequence: **shape and colour are separate, and both are cheap.**
 
@@ -168,10 +169,12 @@ previously replaced that claim with **[go]**'s per-column format, but **both are
 describing different paths**: **[go]** implements the *text* upload, and the gist may have been
 describing the *image* upload. Discarding it was likely a mistake.
 
-Candidate mechanisms, cheapest first:
+**Status: every cheap hypothesis has been tested and eliminated.** What remains is a capture.
 
-1. **`DATS`'s 5th arg byte.** Unexplained in every source; all send `0`. Prime suspect for selecting a
-   destination slot or a payload format. Sweepable — the Upload lab in the app does this.
+Ruled out on hardware:
+
+1. ~~**`DATS`'s 5th arg byte** as a slot or format selector.~~ **Disproven** — swept 0→20 with a
+   known-good payload, no slot changed.
 2. ~~**`bitmapLen = 0`**, on the theory that the whole payload is then read as raw pixels.~~
    **Tested — it SOFT-LOCKS the mask.** The upload animation freezes mid-way and only a power cycle
    recovers it. Notably every step still ACKed (`DATSOK`, 5× `REOK`, `DATCPOK`), so **notification
@@ -182,6 +185,15 @@ Candidate mechanisms, cheapest first:
 4. **`DELE` and `CHEC`** exist in **[rd]** and nowhere else — "delete uploaded images" and "query how
    many images are uploaded". Both only make sense if a *writable* slot bank exists, which is further
    evidence the path is there.
+
+### What we know the DIY path must do
+
+- Address **~48 rows**, not the 16-row band `DATS` reaches.
+- Carry **per-pixel colour** — DIY images show vertical colour variation inside one column.
+- Write a **persistent, `PLAY`-addressable slot**, of which `CHEC` says there are 34.
+
+None of that is expressible in `DATS`'s `[bitmap][per-column colours]` split, so the DIY path is
+near-certainly a **different verb that no public source has ever recorded**.
 
 **The decisive test is an Android HCI snoop capture** of the official app performing a DIY image
 upload. Developer options → *Enable Bluetooth HCI snoop log* → do the upload → pull
